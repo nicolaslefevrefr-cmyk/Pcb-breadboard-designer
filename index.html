@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>PCB & Breadboard Designer</title>
+<meta name="description" content="Draw breadboard / perfboard wiring diagrams: configurable hole grid, footprint library, jumpers, power rails, and a debug mode to trace nets and connections.">
+<meta name="theme-color" content="#3763e8">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="scrim" id="scrim"></div>
+
+  <div id="drawer">
+    <div id="drawer-head">
+      <h2 style="display:flex;align-items:center;">Settings
+        <button class="iconbtn close-drawer" id="drawerCloseBtn" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </h2>
+      <div id="tabs">
+        <button class="tab-btn active" data-tab="board">Board</button>
+        <button class="tab-btn" data-tab="library">Library</button>
+        <button class="tab-btn" data-tab="wires">Wires</button>
+        <button class="tab-btn" data-tab="debug">Debug</button>
+        <button class="tab-btn" data-tab="project">Project</button>
+      </div>
+    </div>
+    <div id="drawer-body">
+
+      <!-- BOARD PANEL -->
+      <div class="panel active" id="panel-board">
+        <p class="section-title">Grid</p>
+        <div class="row2">
+          <div class="field"><label>Columns</label><input type="number" id="bColsInput" min="2" max="120" value="30"></div>
+          <div class="field"><label>Rows</label><input type="number" id="bRowsInput" min="2" max="120" value="20"></div>
+        </div>
+        <div class="field">
+          <label>Grid spacing (mm)</label>
+          <input type="number" id="bSpacingMm" min="0.1" step="0.01" value="2.54">
+        </div>
+        <p class="section-title">Center gap</p>
+        <div class="row2">
+          <div class="field"><label>Horizontal break after row #</label><input type="number" id="bGapRow" min="0" value="0"></div>
+          <div class="field"><label>Vertical break after column #</label><input type="number" id="bGapCol" min="0" value="0"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Row gap width (pins)</label><input type="number" id="bGapRowWidth" min="1" max="5" value="1"></div>
+          <div class="field"><label>Column gap width (pins)</label><input type="number" id="bGapColWidth" min="1" max="5" value="1"></div>
+        </div>
+
+        <p class="section-title">Electrical links per side</p>
+        <div class="field">
+          <label>Front side (top)</label>
+          <select id="bLinkFront">
+            <option value="none">None — every hole isolated</option>
+            <option value="columns">Columns linked together</option>
+            <option value="rows">Rows linked together</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Back side (bottom)</label>
+          <select id="bLinkBack">
+            <option value="none">None — every hole isolated</option>
+            <option value="columns">Columns linked together</option>
+            <option value="rows">Rows linked together</option>
+          </select>
+        </div>
+
+        <p class="section-title">Power rails (horizontal lines)</p>
+        <div class="check-row">
+          <input type="checkbox" id="bRailTop">
+          <label for="bRailTop">Rails at the top of the board</label>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="bRailBottom">
+          <label for="bRailBottom">Rails at the bottom of the board</label>
+        </div>
+        <button class="btn" id="bApplyBtn">Apply to board</button>
+      </div>
+
+      <!-- LIBRARY PANEL -->
+      <div class="panel" id="panel-library">
+        <p class="section-title">Standard library</p>
+        <div class="lib-grid" id="libGrid"></div>
+        <hr class="sep">
+        <button class="btn secondary" id="fpNewBtn">+ New custom component</button>
+        <p class="section-title" style="margin-top:18px;">Custom components (<span id="customFpCount">0</span>)</p>
+        <div id="customFpList"></div>
+      </div>
+
+      <!-- WIRES PANEL -->
+      <div class="panel" id="panel-wires">
+        <p class="section-title">New wire</p>
+        <div class="field">
+          <label>Placement side</label>
+          <select id="wFace">
+            <option value="front">Front side</option>
+            <option value="back">Back side</option>
+          </select>
+        </div>
+        <div class="check-row">
+          <input type="checkbox" id="wRandomColor" checked>
+          <label for="wRandomColor">Random color for each new wire</label>
+        </div>
+        <div class="field" id="wManualColorField" style="display:none;">
+          <label>Color</label>
+          <input type="text" id="wManualColor" value="#3763e8">
+        </div>
+        <button class="btn ghost" id="wFinishBtn">Finish current wire</button>
+
+        <hr class="sep">
+        <p class="section-title">Placed wires (<span id="wireCount">0</span>)</p>
+        <div id="wireList"></div>
+      </div>
+
+      <!-- DEBUG PANEL -->
+      <div class="panel" id="panel-debug">
+        <p class="section-title">Probe</p>
+        <div id="debug-result" class="empty">No point probed yet.</div>
+
+        <hr class="sep">
+        <div class="check-row">
+          <input type="checkbox" id="dbgNetColors">
+          <label for="dbgNetColors">Color all electrical nets</label>
+        </div>
+
+        <p class="section-title">Automatic checks</p>
+        <div id="warn-list"></div>
+
+        <hr class="sep">
+        <p class="section-title">Individual connections (<span id="connCount">0</span>)</p>
+        <div id="conn-list"></div>
+      </div>
+
+      <!-- PROJECT PANEL -->
+      <div class="panel" id="panel-project">
+        <p class="section-title">Save</p>
+        <button class="btn secondary" id="exportBtn">Export project (.json)</button>
+        <div class="field" style="margin-top:10px;">
+          <label>Import project</label>
+          <input type="file" id="importFile" accept="application/json">
+        </div>
+        <hr class="sep">
+        <p class="section-title">Image</p>
+        <button class="btn secondary" id="exportPngBtn">Export schematic as PNG</button>
+        <hr class="sep">
+        <button class="btn danger" id="resetBtn">Reset project (keeps library)</button>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="main-col">
+    <div id="topbar">
+      <button class="iconbtn" id="menuBtn" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div class="title">PCB &amp; Breadboard Designer<small>Wiring diagrams for breadboards &amp; perfboards</small></div>
+      <button class="iconbtn" id="installBtn" aria-label="Install">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14"/></svg>
+      </button>
+    </div>
+
+    <div id="stage-wrap">
+      <canvas id="stage"></canvas>
+      <div id="status-pill"></div>
+      <div id="face-toggle">
+        <button data-face="front" class="active"><span class="dot"></span>Front side</button>
+        <button data-face="back"><span class="dot"></span>Back side</button>
+      </div>
+      <div id="comp-actions">
+        <button id="caRotate" title="Rotate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v5h-5"/></svg></button>
+        <button id="caMirror" title="Mirror"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M7 7l-4 5 4 5M17 7l4 5-4 5"/></svg></button>
+        <button id="caDelete" class="danger" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/></svg></button>
+      </div>
+
+      <div id="zoom-controls">
+        <button id="zoomIn">+</button>
+        <button id="zoomFit" style="font-size:11px;">⤢</button>
+        <button id="zoomOut">−</button>
+      </div>
+
+      <div id="floating-toolbar">
+        <button class="tool-btn active" data-tool="select" title="Select / move">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l7 17 2-7 7-2z"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="wire" title="Place a wire">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM18 16a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/><path d="M6 8v3a5 5 0 0 0 5 5h1"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="bend" title="Add a bend to a wire">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V9a4 4 0 0 1 4-4h10"/><path d="m15 2 4 3-4 3"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="probe" title="Debug probe">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="erase" title="Erase (tap an item)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4-4a1 1 0 0 1 0-1.4l10-10a2 2 0 0 1 2.8 0l4.6 4.6a2 2 0 0 1 0 2.8L12 21ZM6 13l6 6"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="modalScrim"></div>
+
+<div class="modal" id="compModal">
+  <div class="modal-head">
+    <h3 id="compModalTitle">Component</h3>
+    <button class="iconbtn" id="compModalClose" aria-label="Close">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="modal-body">
+    <div class="modal-preview" id="compModalPreview"></div>
+    <div class="field"><label>Label</label><input type="text" id="compModalLabel"></div>
+    <p class="section-title">Pins</p>
+    <div id="compModalPins"></div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn ghost small" id="compModalRotate">Rotate</button>
+    <button class="btn ghost small" id="compModalMirror">Mirror</button>
+    <button class="btn danger small" id="compModalDelete">Delete</button>
+  </div>
+</div>
+
+<div class="modal" id="fpModal">
+  <div class="modal-head">
+    <h3>New custom component</h3>
+    <button class="iconbtn" id="fpModalClose" aria-label="Close">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="modal-body">
+    <div class="modal-preview" id="fpModalPreview"></div>
+    <div class="field"><label>Name</label><input type="text" id="fpName" placeholder="e.g. 4-channel relay module"></div>
+    <div class="row2">
+      <div class="field"><label>Pins — top row</label><input type="number" id="fpTop" min="0" max="60" value="4"></div>
+      <div class="field"><label>Pins — bottom row</label><input type="number" id="fpBottom" min="0" max="60" value="0"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Pin pitch (cells)</label><input type="number" id="fpPitch" min="1" max="10" value="1"></div>
+      <div class="field"><label>Row gap (cells)</label><input type="number" id="fpRowGap" min="1" max="20" value="3"></div>
+    </div>
+    <div class="field"><label>Pin numbers — top (optional, comma-separated)</label><input type="text" id="fpNumbersTop" placeholder="defaults to 1, 2, 3…"></div>
+    <div class="field"><label>Pin names — top (comma-separated, left→right)</label><input type="text" id="fpNamesTop" placeholder="e.g. VCC, IN1, IN2, GND"></div>
+    <div class="field"><label>Pin numbers — bottom (optional, comma-separated)</label><input type="text" id="fpNumbersBottom" placeholder="continues numbering by default"></div>
+    <div class="field"><label>Pin names — bottom (comma-separated, left→right)</label><input type="text" id="fpNamesBottom" placeholder="leave empty if no bottom row"></div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn ghost" id="fpModalCancel">Cancel</button>
+    <button class="btn secondary" id="fpModalSave">Add to library</button>
+  </div>
+</div>
+
+<div class="modal small" id="alertModal">
+  <div class="modal-body"><p id="alertModalMsg" style="margin:0;font-size:14px;line-height:1.5;"></p></div>
+  <div class="modal-foot"><button class="btn" id="alertModalOk">OK</button></div>
+</div>
+
+<div class="modal small" id="confirmModal">
+  <div class="modal-body"><p id="confirmModalMsg" style="margin:0;font-size:14px;line-height:1.5;"></p></div>
+  <div class="modal-foot">
+    <button class="btn ghost" id="confirmModalCancel">Cancel</button>
+    <button class="btn danger" id="confirmModalOk">Confirm</button>
+  </div>
+</div>
+
+
+</body>
+<script src="js/app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js').catch(() => {});
+  });
+}
+</script>
+</html>
