@@ -116,21 +116,34 @@ const GRID_PX = 26; // grid step in pixels at zoom=1
    step a fixed GRID_PX, so components straddling the gap never get
    visually enlarged: their own defined pin spacing is always preserved,
    and their pins always land exactly on real holes. */
+/* b.rows / b.cols are the USABLE hole counts the person configures. When a
+   center gap is active it does not eat into that count — it adds
+   Math.max(1,width) extra physical row/col slots on top, so the number of
+   placeable rows/columns always matches what was entered. totalRows()/
+   totalCols() give the full physical span (usable + gap slots), which is
+   what every geometry/iteration helper below should use. */
+function totalRows(){
+  const b = state.board;
+  return b.rows + (b.gapRow>0 ? Math.max(1,b.gapRowWidth||1) : 0);
+}
+function totalCols(){
+  const b = state.board;
+  return b.cols + (b.gapCol>0 ? Math.max(1,b.gapColWidth||1) : 0);
+}
 function isRowGapped(row){
   const b = state.board;
-  return b.gapRow>0 && row>=0 && row<b.rows && row>=b.gapRow && row<b.gapRow+Math.max(1,b.gapRowWidth||1);
+  return b.gapRow>0 && row>=0 && row<totalRows() && row>=b.gapRow && row<b.gapRow+Math.max(1,b.gapRowWidth||1);
 }
 function isColGapped(col){
   const b = state.board;
-  return b.gapCol>0 && col>=0 && col<b.cols && col>=b.gapCol && col<b.gapCol+Math.max(1,b.gapColWidth||1);
+  return b.gapCol>0 && col>=0 && col<totalCols() && col>=b.gapCol && col<b.gapCol+Math.max(1,b.gapColWidth||1);
 }
 const RAIL_GAP_PX = 20; // visual space between a rail block and the main grid
 
 function mainGridHeightPx(){
-  const b = state.board;
-  return (b.rows-1)*GRID_PX;
+  return (totalRows()-1)*GRID_PX;
 }
-function railBlockHeightPx(){ return 2*GRID_PX + RAIL_GAP_PX; }
+function railBlockHeightPx(){ return GRID_PX + RAIL_GAP_PX; }
 
 function holeX(col){
   return col*GRID_PX;
@@ -138,29 +151,31 @@ function holeX(col){
 function holeY(row){
   const b = state.board;
   const topOffset = b.railTop ? railBlockHeightPx() : 0;
+  const rows = totalRows();
   if(row===-2) return 0;                    // top rail, +V line (red)
   if(row===-1) return GRID_PX;               // top rail, GND line (black)
-  if(row>=0 && row<b.rows){
+  if(row>=0 && row<rows){
     return topOffset + row*GRID_PX;
   }
   const mainH = mainGridHeightPx();
-  if(row===b.rows) return topOffset + mainH + RAIL_GAP_PX;         // bottom rail, +V line (red)
-  if(row===b.rows+1) return topOffset + mainH + RAIL_GAP_PX + GRID_PX; // bottom rail, GND line (black)
+  if(row===rows) return topOffset + mainH + RAIL_GAP_PX;         // bottom rail, +V line (red)
+  if(row===rows+1) return topOffset + mainH + RAIL_GAP_PX + GRID_PX; // bottom rail, GND line (black)
   return topOffset + row*GRID_PX;
 }
 /* ordered list of every existing row index (grid + active rails) */
 function allRowIndices(){
   const b = state.board;
+  const rows = totalRows();
   const arr=[];
   if(b.railTop) arr.push(-2,-1);
-  for(let r=0;r<b.rows;r++) arr.push(r);
-  if(b.railBottom) arr.push(b.rows,b.rows+1);
+  for(let r=0;r<rows;r++) arr.push(r);
+  if(b.railBottom) arr.push(rows,rows+1);
   return arr;
 }
 function railKind(row){ // 'plus' | 'gnd' | null
-  const b=state.board;
-  if(row===-2||row===b.rows) return 'plus';
-  if(row===-1||row===b.rows+1) return 'gnd';
+  const rows = totalRows();
+  if(row===-2||row===rows) return 'plus';
+  if(row===-1||row===rows+1) return 'gnd';
   return null;
 }
 
@@ -216,12 +231,13 @@ function computeNets(){
   const b = state.board;
   function ensure(c,r){ uf.find(keyOf(c,r)); }
   // per-side links
+  const rows = totalRows(), cols = totalCols();
   function applyLink(mode){
     if(mode==='columns'){
-      for(let c=0;c<b.cols;c++){
+      for(let c=0;c<cols;c++){
         if(isColGapped(c)) continue; // no holes in the gap band
         let prevKey=null;
-        for(let r=0;r<b.rows;r++){
+        for(let r=0;r<rows;r++){
           if(isRowGapped(r)){ prevKey=null; continue; } // gap band: no holes, chain breaks
           ensure(c,r);
           const k = keyOf(c,r);
@@ -230,10 +246,10 @@ function computeNets(){
         }
       }
     } else if(mode==='rows'){
-      for(let r=0;r<b.rows;r++){
+      for(let r=0;r<rows;r++){
         if(isRowGapped(r)) continue;
         let prevKey=null;
-        for(let c=0;c<b.cols;c++){
+        for(let c=0;c<cols;c++){
           if(isColGapped(c)){ prevKey=null; continue; }
           ensure(c,r);
           const k = keyOf(c,r);
@@ -242,7 +258,7 @@ function computeNets(){
         }
       }
     } else {
-      for(let c=0;c<b.cols;c++) for(let r=0;r<b.rows;r++){ if(!isRowGapped(r) && !isColGapped(c)) ensure(c,r); }
+      for(let c=0;c<cols;c++) for(let r=0;r<rows;r++){ if(!isRowGapped(r) && !isColGapped(c)) ensure(c,r); }
     }
   }
   applyLink(b.linkFront);
@@ -251,7 +267,7 @@ function computeNets(){
   // power rails: each rail line is one continuous net along its whole length
   function unionRail(row){
     let prevKey=null;
-    for(let c=0;c<b.cols;c++){
+    for(let c=0;c<cols;c++){
       ensure(c,row);
       const k = keyOf(c,row);
       if(prevKey) uf.union(prevKey,k);
@@ -259,7 +275,7 @@ function computeNets(){
     }
   }
   if(b.railTop){ unionRail(-2); unionRail(-1); }
-  if(b.railBottom){ unionRail(b.rows); unionRail(b.rows+1); }
+  if(b.railBottom){ unionRail(rows); unionRail(rows+1); }
 
   // wires: bond all their points together (a hole spans both sides of the board)
   state.wires.forEach(w=>{
@@ -280,8 +296,7 @@ function computeNets(){
 function netMembersOf(uf,col,row){
   const root = uf.find(keyOf(col,row));
   const members = {holes:[], pins:[]};
-  const b = state.board;
-  for(let c=0;c<b.cols;c++) allRowIndices().forEach(r=>{
+  for(let c=0;c<totalCols();c++) allRowIndices().forEach(r=>{
     const k = keyOf(c,r);
     if(uf.parent.has(k) && uf.find(k)===root) members.holes.push({col:c,row:r});
   });
@@ -360,7 +375,7 @@ function screenToWorld(x,y){
 
 function boardPixelSize(){
   const b = state.board;
-  const w = (b.cols-1)*GRID_PX;
+  const w = (totalCols()-1)*GRID_PX;
   let h = mainGridHeightPx();
   if(b.railTop) h += railBlockHeightPx();
   if(b.railBottom) h += railBlockHeightPx();
@@ -368,16 +383,16 @@ function boardPixelSize(){
 }
 
 function nearestHole(worldX,worldY){
-  const b = state.board;
+  const cols = totalCols();
   let bestC=0, bestCD=Infinity;
-  for(let c=0;c<b.cols;c++){
+  for(let c=0;c<cols;c++){
     if(isColGapped(c)) continue; // no hole exists in the gap band
     const d = Math.abs(holeX(c)-worldX);
     if(d<bestCD){ bestCD=d; bestC=c; }
   }
   let bestR=0, bestRD=Infinity;
   allRowIndices().forEach(r=>{
-    if(r>=0 && r<b.rows && isRowGapped(r)) return; // no hole exists in the gap band
+    if(isRowGapped(r)) return; // no hole exists in the gap band
     const d = Math.abs(holeY(r)-worldY);
     if(d<bestRD){ bestRD=d; bestR=r; }
   });
@@ -445,18 +460,20 @@ function draw(){
   roundRect(ctx, -pad, -pad, size.w+pad*2, size.h+pad*2, 10);
   ctx.fill(); ctx.stroke();
 
+  const totalR = totalRows(), totalC = totalCols();
+
   // center gap shading (spans the removed row/col band, edge to edge of the real holes flanking it)
   if(b.gapRow>0){
-    const gapEnd = Math.min(b.rows, b.gapRow+Math.max(1,b.gapRowWidth||1));
+    const gapEnd = Math.min(totalR, b.gapRow+Math.max(1,b.gapRowWidth||1));
     const yTop = holeToPixel(0,b.gapRow-1).y;
-    const yBot = holeToPixel(0,gapEnd<b.rows?gapEnd:b.rows-1).y + (gapEnd<b.rows?0:GRID_PX);
+    const yBot = holeToPixel(0,gapEnd<totalR?gapEnd:totalR-1).y + (gapEnd<totalR?0:GRID_PX);
     ctx.fillStyle = 'rgba(180,190,205,0.16)';
     ctx.fillRect(-pad, yTop+GRID_PX/2, size.w+pad*2, (yBot-yTop-GRID_PX));
   }
   if(b.gapCol>0){
-    const gapEnd = Math.min(b.cols, b.gapCol+Math.max(1,b.gapColWidth||1));
+    const gapEnd = Math.min(totalC, b.gapCol+Math.max(1,b.gapColWidth||1));
     const xLeft = holeToPixel(b.gapCol-1,0).x;
-    const xRight = holeToPixel(gapEnd<b.cols?gapEnd:b.cols-1,0).x + (gapEnd<b.cols?0:GRID_PX);
+    const xRight = holeToPixel(gapEnd<totalC?gapEnd:totalC-1,0).x + (gapEnd<totalC?0:GRID_PX);
     ctx.fillStyle = 'rgba(180,190,205,0.16)';
     ctx.fillRect(xLeft+GRID_PX/2, -pad, (xRight-xLeft-GRID_PX), size.h+pad*2);
   }
@@ -467,21 +484,21 @@ function draw(){
   ctx.globalAlpha = 0.10;
   ctx.fillStyle = state.view.face==='front' ? '#3763e8' : '#e08a2c';
   if(linkMode==='columns'){
-    for(let c=0;c<b.cols;c++){
+    for(let c=0;c<totalC;c++){
       drawColumnBand(c);
     }
   } else if(linkMode==='rows'){
-    for(let r=0;r<b.rows;r++){
+    for(let r=0;r<totalR;r++){
       drawRowBand(r);
     }
   }
   ctx.restore();
 
   // grid holes (+ power rails) — none drawn inside the removed gap band
-  for(let c=0;c<b.cols;c++){
+  for(let c=0;c<totalC;c++){
     if(isColGapped(c)) continue;
     allRowIndices().forEach(r=>{
-      if(r>=0 && r<b.rows && isRowGapped(r)) return;
+      if(isRowGapped(r)) return;
       const p = holeToPixel(c,r);
       const netColor = getNetColor(uf,c,r);
       const rk = railKind(r);
@@ -498,7 +515,7 @@ function draw(){
   function drawRailLine(row,color,label){
     const y = holeY(row);
     ctx.strokeStyle = color; ctx.globalAlpha=0.5; ctx.lineWidth=1.4/state.view.zoom;
-    ctx.beginPath(); ctx.moveTo(holeX(0)-GRID_PX*0.5,y); ctx.lineTo(holeX(b.cols-1)+GRID_PX*0.5,y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(holeX(0)-GRID_PX*0.5,y); ctx.lineTo(holeX(totalC-1)+GRID_PX*0.5,y); ctx.stroke();
     ctx.globalAlpha=1;
     if(state.view.zoom>0.4){
       ctx.fillStyle = color; ctx.textAlign='right';
@@ -506,7 +523,7 @@ function draw(){
     }
   }
   if(b.railTop){ drawRailLine(-2,'#e0524a','+'); drawRailLine(-1,'#3a3f47','−'); }
-  if(b.railBottom){ drawRailLine(b.rows,'#e0524a','+'); drawRailLine(b.rows+1,'#3a3f47','−'); }
+  if(b.railBottom){ drawRailLine(totalR,'#e0524a','+'); drawRailLine(totalR+1,'#3a3f47','−'); }
   ctx.restore();
 
   // probe highlight
@@ -540,22 +557,24 @@ function draw(){
 function drawColumnBand(c){
   if(isColGapped(c)) return;
   const b = state.board;
-  const top = holeToPixel(c,0), bot = holeToPixel(c, (b.gapRow>0? b.gapRow-1 : b.rows-1));
+  const totalR = totalRows();
+  const top = holeToPixel(c,0), bot = holeToPixel(c, (b.gapRow>0? b.gapRow-1 : totalR-1));
   ctx.fillRect(top.x-GRID_PX*0.32, top.y-GRID_PX*0.32, GRID_PX*0.64, (bot.y-top.y)+GRID_PX*0.64);
   const gapEnd = b.gapRow>0 ? b.gapRow+Math.max(1,b.gapRowWidth||1) : 0;
-  if(b.gapRow>0 && gapEnd<b.rows){
-    const top2 = holeToPixel(c,gapEnd), bot2 = holeToPixel(c,b.rows-1);
+  if(b.gapRow>0 && gapEnd<totalR){
+    const top2 = holeToPixel(c,gapEnd), bot2 = holeToPixel(c,totalR-1);
     ctx.fillRect(top2.x-GRID_PX*0.32, top2.y-GRID_PX*0.32, GRID_PX*0.64, (bot2.y-top2.y)+GRID_PX*0.64);
   }
 }
 function drawRowBand(r){
   if(isRowGapped(r)) return;
   const b = state.board;
-  const left = holeToPixel(0,r), right = holeToPixel((b.gapCol>0? b.gapCol-1: b.cols-1), r);
+  const totalC = totalCols();
+  const left = holeToPixel(0,r), right = holeToPixel((b.gapCol>0? b.gapCol-1: totalC-1), r);
   ctx.fillRect(left.x-GRID_PX*0.32, left.y-GRID_PX*0.32, (right.x-left.x)+GRID_PX*0.64, GRID_PX*0.64);
   const gapEnd = b.gapCol>0 ? b.gapCol+Math.max(1,b.gapColWidth||1) : 0;
-  if(b.gapCol>0 && gapEnd<b.cols){
-    const left2 = holeToPixel(gapEnd,r), right2 = holeToPixel(b.cols-1,r);
+  if(b.gapCol>0 && gapEnd<totalC){
+    const left2 = holeToPixel(gapEnd,r), right2 = holeToPixel(totalC-1,r);
     ctx.fillRect(left2.x-GRID_PX*0.32, left2.y-GRID_PX*0.32, (right2.x-left2.x)+GRID_PX*0.64, GRID_PX*0.64);
   }
 }
@@ -1248,11 +1267,13 @@ document.getElementById('bApplyBtn').addEventListener('click', function(){
   const gapCol = clamp(parseInt(document.getElementById('bGapCol').value)||0,0,cols-1);
   const gapRowWidth = clamp(parseInt(document.getElementById('bGapRowWidth').value)||1,1,5);
   const gapColWidth = clamp(parseInt(document.getElementById('bGapColWidth').value)||1,1,5);
+  const newTotalCols = cols + (gapCol>0 ? gapColWidth : 0);
+  const newTotalRows = rows + (gapRow>0 ? gapRowWidth : 0);
   const outOfBounds = state.components.some(c=>{
     const b2 = componentBounds(c);
-    return b2.minC<0||b2.maxC>=cols||b2.minR<0||b2.maxR>=rows;
+    return b2.minC<0||b2.maxC>=newTotalCols||b2.minR<0||b2.maxR>=newTotalRows;
   }) || state.wires.some(w=>w.points.some(pt=>{
-    const h = resolveWirePoint(pt); return h && (h.col<0||h.col>=cols||h.row<0||h.row>=rows);
+    const h = resolveWirePoint(pt); return h && (h.col<0||h.col>=newTotalCols||h.row<0||h.row>=newTotalRows);
   }));
   function apply(){
     state.board.cols=cols; state.board.rows=rows;
@@ -1264,8 +1285,8 @@ document.getElementById('bApplyBtn').addEventListener('click', function(){
     state.board.railTop = document.getElementById('bRailTop').checked;
     state.board.railBottom = document.getElementById('bRailBottom').checked;
 
-    state.components = state.components.filter(c=>{ const b2=componentBounds(c); return b2.minC>=0&&b2.maxC<cols&&b2.minR>=0&&b2.maxR<rows; });
-    state.wires = state.wires.filter(w=>w.points.every(pt=>{ const h=resolveWirePoint(pt); return h && h.col>=0&&h.col<cols&&h.row>=0&&h.row<rows; }));
+    state.components = state.components.filter(c=>{ const b2=componentBounds(c); return b2.minC>=0&&b2.maxC<newTotalCols&&b2.minR>=0&&b2.maxR<newTotalRows; });
+    state.wires = state.wires.filter(w=>w.points.every(pt=>{ const h=resolveWirePoint(pt); return h && h.col>=0&&h.col<newTotalCols&&h.row>=0&&h.row<newTotalRows; }));
 
     saveLocal(); refreshWireList(); checkWarningsUI(); fitBoardToView();
     statusPill('Board updated');
