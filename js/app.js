@@ -95,10 +95,11 @@ STD_LIBRARY.forEach(fp=>{
 --------------------------------------------------------------------- */
 const state = {
   board:{ cols:30, rows:20, spacingMm:2.54, gapRow:0, gapCol:0, gapRowWidth:1, gapColWidth:1, linkFront:'none', linkBack:'none', railTop:false, railBottom:false },
-  components:[],   // {id, fpId, col,row, rot, mirror, label}
+  components:[],   // {id, fpId, col,row, rot, mirror, face, label}
   customFootprints:{}, // id -> footprint def
   wires:[],        // {id, face, color, points:[{ref:'hole',col,row}|{ref:'pin',compId,pinIndex}]}
   view:{ zoom:1, ox:0, oy:0, face:'front' },
+  viewOpts:{ showPinNumbers:true, showPinNames:true, showCompLabels:true, showWires:true, showOtherSideComponents:true, showOtherSideWires:true },
   ui:{ tool:'select', selectedComponent:null, selectedFootprintToPlace:null, drawingWire:null, probeResult:null, showNetColors:false }
 };
 
@@ -540,7 +541,12 @@ function draw(){
   }
 
   // wires
-  state.wires.forEach(w=>drawWire(w, uf));
+  if(state.viewOpts.showWires){
+    state.wires.forEach(w=>{
+      if(w.face!==state.view.face && !state.viewOpts.showOtherSideWires) return;
+      drawWire(w, uf);
+    });
+  }
 
   // wire being drawn
   if(state.ui.drawingWire){
@@ -593,19 +599,21 @@ function drawWire(w, uf, isDrawing){
   const pts = w.points.map(resolveWirePoint).filter(Boolean);
   if(pts.length<1) return;
   const px = pts.map(p=>holeToPixel(p.col,p.row));
+  const otherSide = !isDrawing && w.face!==state.view.face;
   ctx.save();
-  const dashed = w.face==='back';
+  const dashed = otherSide;
   if(dashed) ctx.setLineDash([6/state.view.zoom,4/state.view.zoom]);
-  ctx.strokeStyle = w.color;
+  const strokeCol = otherSide ? '#aeb4bd' : w.color;
+  ctx.strokeStyle = strokeCol;
   ctx.lineWidth = (isDrawing?3:2.4)/state.view.zoom;
   ctx.lineCap = 'round'; ctx.lineJoin='round';
-  ctx.globalAlpha = isDrawing? 0.85: 1;
+  ctx.globalAlpha = isDrawing? 0.85: (otherSide? 0.55 : 1);
   ctx.beginPath();
   px.forEach((p,i)=> i===0? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
   ctx.stroke();
   ctx.setLineDash([]);
   // endpoints
-  ctx.fillStyle = w.color;
+  ctx.fillStyle = strokeCol;
   px.forEach((p,i)=>{
     ctx.beginPath();
     ctx.arc(p.x,p.y, i===0||i===px.length-1 ? 4.2 : 3, 0, Math.PI*2);
@@ -623,9 +631,21 @@ function componentColor(kind){
   return map[kind] || '#3d4550';
 }
 
+function pinLabelText(h){
+  const vo = state.viewOpts;
+  const parts=[];
+  if(vo.showPinNames) parts.push(h.name);
+  if(vo.showPinNumbers) parts.push('#'+h.number);
+  return parts.join(' ');
+}
+
 function drawComponent(comp, selected){
   const fp = getFootprint(comp.fpId);
   if(!fp) return;
+  const compFace = comp.face || 'front';
+  const otherSide = compFace !== state.view.face;
+  if(otherSide && !state.viewOpts.showOtherSideComponents) return;
+
   const holes = componentPinHoles(comp);
   const pxHoles = holes.map(h=>({...h, p:holeToPixel(h.col,h.row)}));
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
@@ -634,8 +654,9 @@ function drawComponent(comp, selected){
   const bx=minX-pad, by=minY-pad, bw=(maxX-minX)+pad*2, bh=(maxY-minY)+pad*2;
 
   ctx.save();
-  const col = componentColor(fp.kind);
-  ctx.fillStyle = selected ? '#eef2ff' : '#fff';
+  if(otherSide) ctx.globalAlpha = 0.45;
+  const col = otherSide ? '#9aa1ac' : componentColor(fp.kind);
+  ctx.fillStyle = selected ? '#eef2ff' : (otherSide ? '#f1f2f4' : '#fff');
   ctx.strokeStyle = selected ? '#3763e8' : col;
   ctx.lineWidth = (selected?2.4:1.4)/state.view.zoom;
   roundRect(ctx, bx,by,bw,bh, Math.min(10,bw/4,bh/4));
@@ -656,23 +677,23 @@ function drawComponent(comp, selected){
     ctx.fill();
   });
 
-  // labels: component label centered, pin names near each pin (only if zoom decent)
-  ctx.fillStyle = '#1c2430';
+  // labels: component label centered, pin names/numbers near each pin (only if zoom decent)
   const fontSize = 10;
-  if(state.view.zoom>0.55){
+  if(state.viewOpts.showCompLabels && state.view.zoom>0.55){
+    ctx.fillStyle = otherSide ? '#9aa1ac' : '#1c2430';
     ctx.font = '600 '+fontSize+'px -apple-system,Segoe UI,Roboto,sans-serif';
     ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText(comp.label || fp.name, bx+bw/2, by-8/state.view.zoom);
   }
-  if(state.view.zoom>0.75){
+  if((state.viewOpts.showPinNames || state.viewOpts.showPinNumbers) && state.view.zoom>0.75){
     ctx.font = '500 '+(fontSize-2)+'px -apple-system,Segoe UI,Roboto,sans-serif';
-    ctx.fillStyle = '#5b6472';
+    ctx.fillStyle = otherSide ? '#aeb4bd' : '#5b6472';
     pxHoles.forEach(h=>{
       const above = h.p.y <= by+bh/2;
       ctx.textAlign='center';
       ctx.textBaseline = above? 'bottom':'top';
       const yoff = above? -7 : 7;
-      ctx.fillText(h.name, h.p.x, h.p.y+yoff);
+      ctx.fillText(pinLabelText(h), h.p.x, h.p.y+yoff);
     });
   }
   ctx.restore();
@@ -993,7 +1014,7 @@ function placeComponent(fpId, col,row){
   const fp = getFootprint(fpId);
   const prefix = (fp.kind==='mcu')? 'U' : (fp.kind==='dip'?'U':(fp.kind==='led'?'D':(fp.kind==='res'||fp.kind==='passive2')?'R':(fp.kind==='cap'?'C':(fp.kind==='diode'?'D':(fp.kind==='button'?'SW':(fp.kind==='pot'?'RV':(fp.kind==='trans'?'Q':(fp.kind==='reg'?'U':'X'))))))));
   componentCounters[prefix] = (componentCounters[prefix]||0)+1;
-  const comp = { id: uid('comp'), fpId, col, row, rot:0, mirror:false, label: prefix+componentCounters[prefix] };
+  const comp = { id: uid('comp'), fpId, col, row, rot:0, mirror:false, face: state.view.face||'front', label: prefix+componentCounters[prefix] };
   state.components.push(comp);
   saveLocal();
   checkWarningsUI();
@@ -1111,6 +1132,7 @@ function openComponentModal(compId){
   compModalCompId = compId;
   document.getElementById('compModalTitle').textContent = comp.label;
   document.getElementById('compModalLabel').value = comp.label;
+  document.getElementById('compModalFace').value = comp.face||'front';
   refreshCompModalPreview();
   showModal('compModal');
 }
@@ -1121,6 +1143,12 @@ document.getElementById('compModalLabel').addEventListener('change', function(){
   const v = this.value.trim();
   if(v){ comp.label = v; document.getElementById('compModalTitle').textContent = v; saveLocal(); refreshWireList(); draw(); }
   else this.value = comp.label;
+});
+document.getElementById('compModalFace').addEventListener('change', function(){
+  const comp = state.components.find(c=>c.id===compModalCompId);
+  if(!comp) return;
+  comp.face = this.value;
+  saveLocal(); checkWarningsUI(); refreshWireList(); draw();
 });
 document.getElementById('compModalRotate').addEventListener('click', ()=>{
   const comp = state.components.find(c=>c.id===compModalCompId);
@@ -1238,9 +1266,38 @@ document.querySelectorAll('#face-toggle button').forEach(btn=>{
     document.querySelectorAll('#face-toggle button').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     state.view.face = btn.dataset.face;
+    updateCurrentFaceLabel();
     draw();
   });
 });
+
+/* ---- View panel ---- */
+function updateCurrentFaceLabel(){
+  const el = document.getElementById('vCurrentFace');
+  if(el) el.textContent = state.view.face==='front' ? 'front' : 'back';
+}
+const VIEW_OPT_MAP = {
+  vShowPinNumbers: 'showPinNumbers',
+  vShowPinNames: 'showPinNames',
+  vShowCompLabels: 'showCompLabels',
+  vShowWires: 'showWires',
+  vShowOtherComponents: 'showOtherSideComponents',
+  vShowOtherWires: 'showOtherSideWires'
+};
+Object.keys(VIEW_OPT_MAP).forEach(id=>{
+  const el = document.getElementById(id);
+  el.addEventListener('change', function(){
+    state.viewOpts[VIEW_OPT_MAP[id]] = this.checked;
+    saveLocal();
+    draw();
+  });
+});
+function loadViewFormFromState(){
+  Object.keys(VIEW_OPT_MAP).forEach(id=>{
+    document.getElementById(id).checked = !!state.viewOpts[VIEW_OPT_MAP[id]];
+  });
+  updateCurrentFaceLabel();
+}
 
 document.getElementById('wRandomColor').addEventListener('change', function(){
   document.getElementById('wManualColorField').style.display = this.checked? 'none':'block';
@@ -1402,7 +1459,8 @@ function serializeProject(){
     board: state.board,
     components: state.components,
     customFootprints: state.customFootprints,
-    wires: state.wires.map(w=>({id:w.id, face:w.face, color:w.color, points:w.points}))
+    wires: state.wires.map(w=>({id:w.id, face:w.face, color:w.color, points:w.points})),
+    viewOpts: state.viewOpts
   });
 }
 function saveLocal(){
@@ -1419,10 +1477,12 @@ function loadLocal(){
 }
 function applyProject(data){
   state.board = Object.assign({cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false}, data.board||{});
-  state.components = data.components||[];
+  state.components = (data.components||[]).map(c=>({face:'front', ...c}));
   state.customFootprints = data.customFootprints||{};
   state.wires = (data.wires||[]).map(w=>({...w, selected:false}));
+  state.viewOpts = Object.assign({showPinNumbers:true, showPinNames:true, showCompLabels:true, showWires:true, showOtherSideComponents:true, showOtherSideWires:true}, data.viewOpts||{});
   loadBoardFormFromState();
+  loadViewFormFromState();
   renderCustomFpList();
   refreshWireList();
   checkWarningsUI();
@@ -1489,6 +1549,7 @@ window.addEventListener('resize', resizeCanvas);
 function init(){
   renderLibrary();
   loadBoardFormFromState();
+  loadViewFormFromState();
   if(!loadLocal()){
     renderCustomFpList(); refreshWireList(); checkWarningsUI();
   }
