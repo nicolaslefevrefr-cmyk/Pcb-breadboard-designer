@@ -1187,7 +1187,54 @@ function updateFpModalPreview(){
 ['fpTop','fpBottom','fpPitch','fpRowGap','fpNamesTop','fpNamesBottom','fpNumbersTop','fpNumbersBottom'].forEach(id=>{
   document.getElementById(id).addEventListener('input', updateFpModalPreview);
 });
+let fpEditingId = null;
+function decomposeFootprintForForm(fp){
+  const pins = fp.pins||[];
+  if(!pins.length) return {top:0,bottom:0,pitch:1,rowGap:3,namesTop:[],namesBottom:[],numbersTop:[],numbersBottom:[]};
+  const dys = [...new Set(pins.map(p=>p.dy))].sort((a,b)=>a-b);
+  const topDy = dys[0];
+  const bottomDy = dys.length>1 ? dys[1] : null;
+  const topPins = pins.filter(p=>p.dy===topDy).sort((a,b)=>a.dx-b.dx);
+  const bottomPins = bottomDy!==null ? pins.filter(p=>p.dy===bottomDy).sort((a,b)=>a.dx-b.dx) : [];
+  function pitchOf(list){ return list.length>1 ? (list[1].dx-list[0].dx)||1 : 0; }
+  const pitch = pitchOf(topPins) || pitchOf(bottomPins) || 1;
+  return {
+    top: topPins.length,
+    bottom: bottomPins.length,
+    pitch,
+    rowGap: bottomDy!==null ? (bottomDy-topDy) : 3,
+    namesTop: topPins.map(p=>p.name),
+    namesBottom: bottomPins.map(p=>p.name),
+    numbersTop: topPins.map(p=>String(p.number!==undefined?p.number:'')),
+    numbersBottom: bottomPins.map(p=>String(p.number!==undefined?p.number:''))
+  };
+}
+function openFpModalForEdit(id){
+  const fp = state.customFootprints[id];
+  if(!fp) return;
+  fpEditingId = id;
+  const d = decomposeFootprintForForm(fp);
+  document.getElementById('fpModalTitle').textContent = 'Edit custom component';
+  document.getElementById('fpModalSave').textContent = 'Save changes';
+  document.getElementById('fpModalDelete').style.display = 'block';
+  document.getElementById('fpName').value = fp.name;
+  document.getElementById('fpTop').value = d.top;
+  document.getElementById('fpBottom').value = d.bottom;
+  document.getElementById('fpPitch').value = d.pitch;
+  document.getElementById('fpRowGap').value = d.rowGap;
+  document.getElementById('fpNamesTop').value = d.namesTop.join(', ');
+  document.getElementById('fpNamesBottom').value = d.namesBottom.join(', ');
+  document.getElementById('fpNumbersTop').value = d.numbersTop.join(', ');
+  document.getElementById('fpNumbersBottom').value = d.numbersBottom.join(', ');
+  updateFpModalPreview();
+  closeDrawer();
+  showModal('fpModal');
+}
 document.getElementById('fpNewBtn').addEventListener('click', ()=>{
+  fpEditingId = null;
+  document.getElementById('fpModalTitle').textContent = 'New custom component';
+  document.getElementById('fpModalSave').textContent = 'Add to library';
+  document.getElementById('fpModalDelete').style.display = 'none';
   document.getElementById('fpName').value='';
   document.getElementById('fpTop').value=4;
   document.getElementById('fpBottom').value=0;
@@ -1218,12 +1265,26 @@ document.getElementById('fpModalSave').addEventListener('click', function(){
   const pins=[];
   for(let i=0;i<top;i++) pins.push({name:namesTop[i]||('T'+(i+1)), number:numbersTop[i]||String(i+1), dx:i*pitch, dy:0});
   for(let i=0;i<bottom;i++) pins.push({name:namesBottom[i]||('B'+(i+1)), number:numbersBottom[i]||String(top+i+1), dx:i*pitch, dy:rowGap});
-  const id = uid('custom');
+  const id = fpEditingId || uid('custom');
   state.customFootprints[id] = {id, name, pins, kind:'custom', bodyPad:0.32, custom:true};
   saveLocal();
   renderCustomFpList();
+  checkWarningsUI(); refreshWireList(); draw();
   hideModal('fpModal');
-  statusPill('Added to library');
+  statusPill(fpEditingId ? 'Component updated' : 'Added to library');
+  fpEditingId = null;
+});
+document.getElementById('fpModalDelete').addEventListener('click', function(){
+  const id = fpEditingId;
+  if(!id) return;
+  if(state.components.some(c=>c.fpId===id)){ showAlert('This component is used on the board — remove it first.'); return; }
+  showConfirm('Delete this custom component from the library?', ()=>{
+    delete state.customFootprints[id];
+    saveLocal();
+    renderCustomFpList();
+    hideModal('fpModal');
+    fpEditingId = null;
+  });
 });
 
 /* ---------------------------------------------------------------------
@@ -1383,13 +1444,17 @@ function renderCustomFpList(){
     placeBtn.textContent='➕';
     placeBtn.title='Place on board';
     placeBtn.addEventListener('click', ()=>{ document.querySelector('.tool-btn[data-tool="select"]').click(); state.ui.selectedFootprintToPlace=id; closeDrawer(); statusPill('Tap the board to place "'+fp.name+'"',2600); });
+    const editBtn = document.createElement('button');
+    editBtn.textContent='✎';
+    editBtn.title='Edit (updates every placed instance too)';
+    editBtn.addEventListener('click', ()=>{ openFpModalForEdit(id); });
     const delBtn = document.createElement('button');
     delBtn.innerHTML='✕';
     delBtn.addEventListener('click', ()=>{
       if(state.components.some(c=>c.fpId===id)){ showAlert('This component is used on the board — remove it first.'); return; }
       delete state.customFootprints[id]; saveLocal(); renderCustomFpList();
     });
-    div.appendChild(placeBtn); div.appendChild(delBtn);
+    div.appendChild(placeBtn); div.appendChild(editBtn); div.appendChild(delBtn);
     list.appendChild(div);
   });
 }
@@ -1505,6 +1570,38 @@ document.getElementById('importFile').addEventListener('change', function(e){
       saveLocal();
       fitBoardToView();
       statusPill('Project imported');
+    }catch(err){ showAlert('Invalid file.'); }
+  };
+  reader.readAsText(file);
+  e.target.value='';
+});
+document.getElementById('libExportBtn').addEventListener('click', ()=>{
+  const blob = new Blob([JSON.stringify({customFootprints: state.customFootprints})], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'component-library.json';
+  a.click();
+});
+document.getElementById('libImportFile').addEventListener('change', function(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(){
+    try{
+      const data = JSON.parse(reader.result);
+      // accept either a bare {customFootprints:{...}} library file or a full project export
+      const incoming = data.customFootprints || (Object.values(data).every(v=>v && v.pins) ? data : null);
+      if(!incoming){ showAlert('This file has no component library to import.'); return; }
+      let added = 0;
+      Object.values(incoming).forEach(fp=>{
+        if(!fp || !Array.isArray(fp.pins)) return;
+        const id = uid('custom'); // always a fresh id, so importing only ever appends
+        state.customFootprints[id] = {...fp, id, custom:true};
+        added++;
+      });
+      saveLocal();
+      renderCustomFpList();
+      statusPill(added ? `${added} component(s) added to the library` : 'Nothing to import');
     }catch(err){ showAlert('Invalid file.'); }
   };
   reader.readAsText(file);

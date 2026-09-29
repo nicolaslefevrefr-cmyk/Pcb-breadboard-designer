@@ -124,6 +124,13 @@
         <button class="btn secondary" id="fpNewBtn">+ New custom component</button>
         <p class="section-title" style="margin-top:18px;">Custom components (<span id="customFpCount">0</span>)</p>
         <div id="customFpList"></div>
+        <hr class="sep">
+        <p class="section-title">Library file</p>
+        <button class="btn secondary" id="libExportBtn">Export library (.json)</button>
+        <div class="field" style="margin-top:10px;">
+          <label>Import library (adds to the current one)</label>
+          <input type="file" id="libImportFile" accept="application/json">
+        </div>
       </div>
 
       <!-- WIRES PANEL -->
@@ -270,7 +277,7 @@
 
 <div class="modal" id="fpModal">
   <div class="modal-head">
-    <h3>New custom component</h3>
+    <h3 id="fpModalTitle">New custom component</h3>
     <button class="iconbtn" id="fpModalClose" aria-label="Close">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
@@ -294,6 +301,7 @@
   <div class="modal-foot">
     <button class="btn ghost" id="fpModalCancel">Cancel</button>
     <button class="btn secondary" id="fpModalSave">Add to library</button>
+    <button class="btn danger small" id="fpModalDelete" style="display:none;">Delete</button>
   </div>
 </div>
 
