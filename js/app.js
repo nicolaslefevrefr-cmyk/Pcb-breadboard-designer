@@ -11,8 +11,25 @@ function uid(prefix){ return prefix+'_'+Math.random().toString(36).slice(2,9)+Da
 function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 function keyOf(c,r){ return c+','+r; }
 function escapeXml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-const RAND_COLORS = ['#e0524a','#3763e8','#1f9e6d','#e08a2c','#8c4fd6','#0fa3b1','#d6458c','#5c7a1f','#c9982c','#2c7be0','#c02f60','#188a63'];
-function randomWireColor(){ return RAND_COLORS[Math.floor(Math.random()*RAND_COLORS.length)]; }
+const WIRE_COLORS = [
+  {name:'Red',hex:'#d32f2f'},{name:'Orange',hex:'#f57c00'},{name:'Yellow',hex:'#f2c200'},{name:'Green',hex:'#2e9e44'},
+  {name:'Blue',hex:'#1e6fd9'},{name:'Purple',hex:'#8e44ad'},{name:'Brown',hex:'#8d5524'},{name:'Gray',hex:'#8d949e'},
+  {name:'Black',hex:'#1c2430'},{name:'White',hex:'#f4f4f4'}
+];
+function randomWireColor(){ const list = WIRE_COLORS.filter(c=>c.name!=='White'); return list[Math.floor(Math.random()*list.length)].hex; }
+let manualWireColor = WIRE_COLORS[4].hex;
+/* standard color swatches; onPick receives the hex value */
+function renderSwatches(container, current, onPick){
+  container.innerHTML='';
+  WIRE_COLORS.forEach(c=>{
+    const b = document.createElement('button');
+    b.type='button'; b.title=c.name;
+    const sel = (current||'').toLowerCase()===c.hex.toLowerCase();
+    b.style.cssText = 'width:30px;height:30px;border-radius:50%;cursor:pointer;padding:0;background:'+c.hex+';border:'+(sel?'3px solid #3763e8':'1.5px solid #c7ccd4')+';box-shadow:'+(sel?'0 0 0 2px #fff inset':'none')+';';
+    b.addEventListener('click', ()=>{ onPick(c.hex); renderSwatches(container, c.hex, onPick); });
+    container.appendChild(b);
+  });
+}
 
 /* Union-Find */
 function UnionFind(){
@@ -714,6 +731,7 @@ function drawWire(w, uf, isDrawing){
     else ctx.rect(p.x-2.8,p.y-2.8,5.6,5.6); // square handle = visual bend, not a connection
     ctx.fill();
   });
+  if(w.locked && px.length>1){ const m=px[Math.floor((px.length-1)/2)], n=px[Math.floor((px.length-1)/2)+1]||m; drawPadlock((m.x+n.x)/2,(m.y+n.y)/2-8); }
   if(w.selected){
     ctx.strokeStyle = '#1c2430'; ctx.lineWidth=1/state.view.zoom;
     px.forEach(p=>{ ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.stroke(); });
@@ -727,6 +745,13 @@ function componentColor(kind){
 }
 
 
+function drawPadlock(x,y){
+  ctx.save();
+  ctx.fillStyle='#5b6472'; ctx.strokeStyle='#5b6472'; ctx.lineWidth=1.4;
+  ctx.fillRect(x-4,y-1,8,6);
+  ctx.beginPath(); ctx.arc(x,y-1,2.6,Math.PI,0); ctx.stroke();
+  ctx.restore();
+}
 function drawComponent(comp, selected){
   const fp = getFootprint(comp.fpId);
   if(!fp) return;
@@ -754,6 +779,7 @@ function drawComponent(comp, selected){
   ctx.fill();
   ctx.globalAlpha = baseAlpha;
   ctx.stroke();
+  if(comp.locked) drawPadlock(bx+bw-9, by+9);
 
   // pin1 marker (small notch on dip/header)
   if(fp.kind==='dip' || fp.kind==='mcu'){
@@ -959,9 +985,17 @@ function onPointerDown(e){
       }
       return;
     }
-    const comp = hitTestComponent(world.x,world.y);
+    // smart selection: a wire drawn over a component wins
+    const wireFirst = hitTestWire(world.x,world.y);
+    const comp = wireFirst ? null : hitTestComponent(world.x,world.y);
     if(comp){
       selectComponent(comp.id);
+      if(comp.locked){
+        pointerState.mode='pan';
+        pointerState.startX=pos.x; pointerState.startY=pos.y;
+        pointerState.startOx=state.view.ox; pointerState.startOy=state.view.oy;
+        return;
+      }
       pointerState.mode='dragComp';
       pointerState.dragComp = comp;
       pointerState.dragOffset = {x: world.x - holeToPixel(comp.col,comp.row).x, y: world.y - holeToPixel(comp.col,comp.row).y};
@@ -969,8 +1003,9 @@ function onPointerDown(e){
       pointerState.dragMoved = false;
       return;
     }
-    const wireHit = hitTestWire(world.x,world.y);
+    const wireHit = wireFirst;
     if(wireHit){
+      selectComponent(null);
       selectWire(wireHit.wire.id);
       pointerState.mode='dragWirePoint';
       // grab an existing point if close enough, otherwise drag from the segment to create a visual bend
@@ -1000,7 +1035,7 @@ function onPointerDown(e){
     lastTapTime = now; lastTapTarget = target;
 
     if(!state.ui.drawingWire){
-      const color = document.getElementById('wRandomColor').checked ? randomWireColor() : document.getElementById('wManualColor').value;
+      const color = document.getElementById('wRandomColor').checked ? randomWireColor() : manualWireColor;
       state.ui.drawingWire = { id: uid('wire'), face: state.view.face||'front', color, points:[toWirePoint(target)] };
     } else {
       state.ui.drawingWire.points.push(toWirePoint(target));
@@ -1038,9 +1073,9 @@ function onPointerDown(e){
 
   if(tool==='erase'){
     const comp = hitTestComponent(world.x,world.y);
-    if(comp){ removeComponent(comp.id); return; }
-    const wireHit = hitTestWire(world.x,world.y);
-    if(wireHit){ removeWire(wireHit.wire.id); return; }
+    const wh = hitTestWire(world.x,world.y);
+    if(wh){ if(wh.wire.locked){ statusPill('Wire is locked'); return; } removeWire(wh.wire.id); return; }
+    if(comp){ if(comp.locked){ statusPill('Component is locked'); return; } removeComponent(comp.id); return; }
     return;
   }
 }
@@ -1055,6 +1090,21 @@ function probeFacesAt(col,row){
   });
   // bare hole / rail: nothing attached yet, so show both copper faces
   return faces.size ? ['front','back'].filter(f=>faces.has(f)) : ['front','back'];
+}
+
+/* wire ends sitting on a pin of this component become pin references, so the wire
+   end follows the component when it is moved (bends stay where they are) */
+function attachWireEndsToComponent(comp){
+  const holes = componentPinHoles(comp);
+  state.wires.forEach(w=>{
+    if(w.locked || w.face!==(comp.face||'front')) return;
+    [0,w.points.length-1].forEach(i=>{
+      const pt = w.points[i];
+      if(!pt || pt.ref!=='hole') return;
+      const h = holes.find(x=>x.col===pt.col && x.row===pt.row);
+      if(h) w.points[i] = {ref:'pin', compId:comp.id, pinIndex:h.index};
+    });
+  });
 }
 
 function toWirePoint(target){
@@ -1087,6 +1137,8 @@ function finishDrawingWire(){
   saveLocal();
   statusPill('Wire added');
   draw();
+  // back to Select / Move so the next tap does not start a new wire
+  if(state.ui.tool==='wire'){ const sb = document.querySelector('.tool-btn[data-tool="select"]'); if(sb) sb.click(); }
 }
 document.getElementById('wFinishBtn').addEventListener('click', finishDrawingWire);
 
@@ -1118,8 +1170,9 @@ function onPointerMove(e){
   } else if(pointerState.mode==='dragComp' && pointerState.dragComp){
     if(!pointerState.dragMoved){
       const dist = Math.hypot(pos.x-pointerState.dragStartScreen.x, pos.y-pointerState.dragStartScreen.y);
-      if(dist>6) pointerState.dragMoved = true;
+      if(dist>6){ pointerState.dragMoved = true; attachWireEndsToComponent(pointerState.dragComp); }
     }
+    if(!pointerState.dragMoved) return;
     const targetX = world.x - pointerState.dragOffset.x;
     const targetY = world.y - pointerState.dragOffset.y;
     const nh = nearestHole(targetX,targetY);
@@ -1128,6 +1181,14 @@ function onPointerMove(e){
     if(!pointerState.dragMoved){
       const dist = Math.hypot(pos.x-pointerState.dragStartScreen.x, pos.y-pointerState.dragStartScreen.y);
       if(dist>6) pointerState.dragMoved = true;
+    }
+    if(pointerState.dragMoved && pointerState.dragWire.locked){
+      // locked wire: behave like background, pan the view instead
+      pointerState.mode='pan';
+      pointerState.startX=pointerState.dragStartScreen.x; pointerState.startY=pointerState.dragStartScreen.y;
+      pointerState.startOx=state.view.ox; pointerState.startOy=state.view.oy;
+      pointerState.dragWire=null;
+      return;
     }
     if(pointerState.dragMoved){
       const w = pointerState.dragWire;
@@ -1156,7 +1217,7 @@ function onPointerUp(e){
   if(activePointers.size<2) pointerState.pinch=null;
   if(pointerState.mode==='dragComp'){
     if(!pointerState.dragMoved && pointerState.dragComp){
-      openComponentModal(pointerState.dragComp.id);
+      // plain tap: just selects the component (details are edited from the library)
     } else {
       saveLocal(); checkWarningsUI(); refreshWireList();
     }
@@ -1223,17 +1284,35 @@ function selectWire(id){
   draw();
 }
 
-document.getElementById('caRotate').addEventListener('click', ()=>{
+function selectedUnlockedComp(){
   const comp = state.components.find(c=>c.id===state.ui.selectedComponent);
+  if(!comp) return null;
+  if(comp.locked){ statusPill('Component is locked'); return null; }
+  return comp;
+}
+document.getElementById('caFlip').addEventListener('click', ()=>{
+  const comp = selectedUnlockedComp(); if(!comp) return;
+  comp.face = oppositeFace(comp.face||'front');
+  saveLocal(); checkWarningsUI(); refreshWireList(); draw();
+});
+document.getElementById('caLock').addEventListener('click', ()=>{
+  const comp = state.components.find(c=>c.id===state.ui.selectedComponent);
+  if(!comp) return;
+  comp.locked = !comp.locked;
+  saveLocal(); updateCompActionsPosition(); draw();
+});
+document.getElementById('caRotate').addEventListener('click', ()=>{
+  const comp = selectedUnlockedComp();
   if(!comp) return; comp.rot = ((comp.rot||0)+90)%360; saveLocal(); checkWarningsUI(); refreshWireList(); draw();
 });
 document.getElementById('caMirror').addEventListener('click', ()=>{
-  const comp = state.components.find(c=>c.id===state.ui.selectedComponent);
+  const comp = selectedUnlockedComp();
   if(!comp) return; comp.mirror = !comp.mirror; saveLocal(); checkWarningsUI(); refreshWireList(); draw();
 });
 document.getElementById('caDelete').addEventListener('click', ()=>{
   const id = state.ui.selectedComponent;
   if(!id) return;
+  if(!selectedUnlockedComp()) return;
   showConfirm('Delete this component? Wires connected to it will also be removed.', ()=>removeComponent(id));
 });
 
@@ -1241,6 +1320,8 @@ function updateCompActionsPosition(){
   const box = document.getElementById('comp-actions');
   const comp = state.components.find(c=>c.id===state.ui.selectedComponent);
   if(!comp){ box.classList.remove('show'); return; }
+  document.getElementById('caLock').style.background = comp.locked ? 'var(--accent-soft)' : 'transparent';
+  document.getElementById('caLock').style.color = comp.locked ? 'var(--accent)' : '';
   const holes = componentPinHoles(comp).map(h=>holeToPixel(h.col,h.row));
   let minX=Infinity,minY=Infinity,maxX=-Infinity;
   holes.forEach(p=>{ minX=Math.min(minX,p.x); maxX=Math.max(maxX,p.x); minY=Math.min(minY,p.y); });
@@ -1359,7 +1440,8 @@ function refreshWireModal(){
   document.getElementById('wireModalDesc').innerHTML =
     `<span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${w.color};flex:0 0 auto;"></span>` +
     `<span>${escapeXml(describeWirePoint(pts[0]))} → ${escapeXml(describeWirePoint(pts[pts.length-1]))}${bends?' · '+bends+' bend(s)':''}</span>`;
-  document.getElementById('wireModalColor').value = /^#[0-9a-f]{6}$/i.test(w.color) ? w.color : '#3763e8';
+  renderSwatches(document.getElementById('wireModalSwatches'), w.color, hex=>{ w.color=hex; saveLocal(); refreshWireList(); refreshWireModal(); draw(); });
+  document.getElementById('wireModalLocked').checked = !!w.locked;
   document.getElementById('wireModalFace').value = w.face;
 }
 function openWireModal(id){
@@ -1373,11 +1455,11 @@ function openWireModal(id){
 function closeWireModal(){ hideModal('wireModal'); selectWire(null); }
 document.getElementById('wireModalClose').addEventListener('click', closeWireModal);
 document.getElementById('wireModalDone').addEventListener('click', closeWireModal);
-document.getElementById('wireModalColor').addEventListener('input', function(){
+document.getElementById('wireModalLocked').addEventListener('change', function(){
   const w = state.wires.find(x=>x.id===wireModalId);
   if(!w) return;
-  w.color = this.value;
-  saveLocal(); refreshWireList(); refreshWireModal(); draw();
+  w.locked = this.checked;
+  saveLocal(); refreshWireList(); draw();
 });
 document.getElementById('wireModalRandom').addEventListener('click', ()=>{
   const w = state.wires.find(x=>x.id===wireModalId);
@@ -1394,6 +1476,8 @@ document.getElementById('wireModalFace').addEventListener('change', function(){
 document.getElementById('wireModalDelete').addEventListener('click', ()=>{
   const id = wireModalId;
   if(!id) return;
+  const w = state.wires.find(x=>x.id===id);
+  if(w && w.locked){ statusPill('Wire is locked'); return; }
   hideModal('wireModal');
   removeWire(id);
 });
@@ -1643,6 +1727,7 @@ function loadViewFormFromState(){
 document.getElementById('wRandomColor').addEventListener('change', function(){
   document.getElementById('wManualColorField').style.display = this.checked? 'none':'block';
 });
+renderSwatches(document.getElementById('wManualSwatches'), manualWireColor, hex=>{ manualWireColor = hex; });
 
 /* ---- Board panel ---- */
 function loadBoardFormFromState(){
@@ -1811,7 +1896,7 @@ function serializeProject(){
     board: state.board,
     components: state.components,
     customFootprints: state.customFootprints,
-    wires: state.wires.map(w=>({id:w.id, face:w.face, color:w.color, points:w.points})),
+    wires: state.wires.map(w=>({id:w.id, face:w.face, color:w.color, locked:!!w.locked, points:w.points})),
     viewOpts: state.viewOpts
   });
 }
