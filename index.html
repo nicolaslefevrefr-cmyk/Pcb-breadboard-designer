@@ -25,6 +25,7 @@
         <button class="tab-btn active" data-tab="board">Board</button>
         <button class="tab-btn" data-tab="view">View</button>
         <button class="tab-btn" data-tab="library">Library</button>
+        <button class="tab-btn" data-tab="components">Components</button>
         <button class="tab-btn" data-tab="wires">Wires</button>
         <button class="tab-btn" data-tab="debug">Debug</button>
         <button class="tab-btn" data-tab="project">Project</button>
@@ -135,6 +136,18 @@
           <label>Import library (adds to the current one)</label>
           <input type="file" id="libImportFile" accept="application/json">
         </div>
+      </div>
+
+      <!-- WIRES PANEL -->
+      <!-- COMPONENTS PANEL -->
+      <div class="panel" id="panel-components">
+        <p class="section-title">Placed components (<span id="compCount">0</span>)</p>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+          <button class="btn ghost small" id="compShowAll">Show all</button>
+          <button class="btn ghost small" id="compLockAll">Lock all</button>
+          <button class="btn ghost small" id="compUnlockAll">Unlock all</button>
+        </div>
+        <div id="compList"></div>
       </div>
 
       <!-- WIRES PANEL -->

@@ -23,6 +23,7 @@ overlaps.
   to a component's pins and follow it when it is moved.
 - Custom components have an independent body rectangle: in the editor, drag it to move it or drag a blue corner to resize it (saved in the JSON project/library).
 - Tap a placed component to select it: a floating bar offers rotate, mirror, switch side, lock and delete. Components and wires can be locked individually; wires take priority when selecting overlapping items. Moving a component drags the ends of its connected wires with it.
+- Components tab: lists every placed component with hide/show, lock/unlock, edit and delete buttons, plus bulk show/lock/unlock; tapping a row selects the component and centers the view on it.
 - Debug probe: follows the copper face where the parts at the probed hole are soldered (opposite to their placement side), regardless of the viewed side.
 - Debug mode: highlight a net, list every individual connection (e.g.
   "esp32 / gpio3 -> dfplayer / gpio2"), and flag overlapping points.

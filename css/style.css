@@ -117,10 +117,10 @@ button,input,select{font-family:inherit;}
 #drawer.show{transform:translateX(0);}
 #drawer-head{padding:16px 16px 10px;flex:0 0 auto;border-bottom:1px solid var(--panel-border);}
 #drawer-head h2{margin:0 0 10px;font-size:17px;}
-#tabs{display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:4px;}
+#tabs{display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:4px;}
 .tab-btn{
-  padding:7px 6px;border-radius:10px;border:none;background:var(--bg);
-  color:var(--ink-soft);font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;
+  padding:7px 2px;border-radius:10px;border:none;background:var(--bg);
+  color:var(--ink-soft);font-size:10.5px;font-weight:600;cursor:pointer;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;
 }
 .tab-btn.active{background:var(--accent);color:#fff;}

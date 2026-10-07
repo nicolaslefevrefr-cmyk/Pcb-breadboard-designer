@@ -755,6 +755,7 @@ function drawPadlock(x,y){
 function drawComponent(comp, selected){
   const fp = getFootprint(comp.fpId);
   if(!fp) return;
+  if(comp.hidden) return;
   const compFace = comp.face || 'front';
   const otherSide = compFace !== state.view.face;
   if(otherSide && !state.viewOpts.showOtherSideComponents) return;
@@ -915,7 +916,7 @@ function hitTestComponent(worldX,worldY){
   for(let i=state.components.length-1;i>=0;i--){
     const comp = state.components[i];
     const fp = getFootprint(comp.fpId);
-    if(!fp) continue;
+    if(!fp || comp.hidden) continue;
     const br = componentBodyRect(comp);
     if(worldX>=br.bx && worldX<=br.bx+br.bw && worldY>=br.by && worldY<=br.by+br.bh) return comp;
     const near = componentPinHoles(comp).some(h=>{ const p=holeToPixel(h.col,h.row); return Math.hypot(p.x-worldX,p.y-worldY)<10; });
@@ -1277,6 +1278,7 @@ function removeWire(id){
 function selectComponent(id){
   state.ui.selectedComponent = id;
   updateCompActionsPosition();
+  refreshComponentList();
   draw();
 }
 function selectWire(id){
@@ -1424,6 +1426,8 @@ document.getElementById('compModalMirror').addEventListener('click', ()=>{
 document.getElementById('compModalDelete').addEventListener('click', ()=>{
   const id = compModalCompId;
   if(!id) return;
+  const cm = state.components.find(c=>c.id===id);
+  if(cm && cm.locked){ statusPill('Component is locked'); return; }
   showConfirm('Delete this component? Wires connected to it will also be removed.', ()=>{
     hideModal('compModal');
     removeComponent(id);
@@ -1825,7 +1829,75 @@ function renderCustomFpList(){
 }
 
 /* ---- Wires panel list ---- */
+/* ---- Components panel ---- */
+const ICON = {
+  eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeOff:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18M10.6 5.1A9.8 9.8 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3.2 3.9M6.6 6.6A16.6 16.6 0 0 0 2 12s4 7 10 7a9.7 9.7 0 0 0 4.4-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+  lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  unlock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>',
+  edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+};
+function refreshComponentList(){
+  const list = document.getElementById('compList');
+  if(!list) return;
+  document.getElementById('compCount').textContent = state.components.length;
+  list.innerHTML='';
+  if(!state.components.length){ list.innerHTML='<div class="empty-note">No components placed yet.</div>'; return; }
+  state.components.forEach(c=>{
+    const fp = getFootprint(c.fpId);
+    const div = document.createElement('div');
+    div.className='list-item';
+    if(c.id===state.ui.selectedComponent) div.style.outline='2px solid var(--accent)';
+    if(c.hidden) div.style.opacity='0.55';
+    div.innerHTML = `<div class="txt"><b>${escapeXml(c.label)}</b>${escapeXml(fp?fp.name:'?')} · ${(c.face||'front')==='front'?'Front':'Back'} side${c.locked?' · locked':''}${c.hidden?' · hidden':''}</div>`;
+    function addBtn(icon,title,fn,active){
+      const b = document.createElement('button');
+      b.innerHTML = icon; b.title = title;
+      b.style.width='32px'; b.style.height='32px';
+      b.querySelector('svg').style.cssText='width:17px;height:17px;';
+      if(active){ b.style.color='var(--accent)'; b.style.background='var(--accent-soft)'; }
+      b.addEventListener('click', e=>{ e.stopPropagation(); fn(); });
+      div.appendChild(b);
+    }
+    addBtn(c.hidden?ICON.eyeOff:ICON.eye, c.hidden?'Show':'Hide', ()=>{
+      c.hidden = !c.hidden;
+      if(c.hidden && state.ui.selectedComponent===c.id) state.ui.selectedComponent=null;
+      saveLocal(); updateCompActionsPosition(); refreshComponentList(); draw();
+    }, c.hidden);
+    addBtn(c.locked?ICON.lock:ICON.unlock, c.locked?'Unlock':'Lock', ()=>{
+      c.locked = !c.locked; saveLocal(); updateCompActionsPosition(); refreshComponentList(); draw();
+    }, c.locked);
+    addBtn(ICON.edit, 'Edit', ()=>{ closeDrawer(); openComponentModal(c.id); });
+    const del = document.createElement('button');
+    del.textContent='✕'; del.title='Delete';
+    del.addEventListener('click', e=>{
+      e.stopPropagation();
+      if(c.locked){ statusPill('Component is locked'); return; }
+      showConfirm('Delete '+c.label+'? Wires connected to it will also be removed.', ()=>removeComponent(c.id));
+    });
+    div.appendChild(del);
+    // row tap: select the component and center the view on it
+    div.style.cursor='pointer';
+    div.addEventListener('click', ()=>{
+      if(c.hidden){ c.hidden=false; saveLocal(); }
+      const br = componentBodyRect(c);
+      if(br){
+        const cx = br.bx+br.bw/2, cy = br.by+br.bh/2;
+        state.view.ox = canvas.clientWidth/2 - cx*state.view.zoom;
+        state.view.oy = canvas.clientHeight/2 - cy*state.view.zoom;
+      }
+      closeDrawer();
+      selectComponent(c.id);
+    });
+    list.appendChild(div);
+  });
+}
+document.getElementById('compShowAll').addEventListener('click', ()=>{ state.components.forEach(c=>c.hidden=false); saveLocal(); refreshComponentList(); draw(); });
+document.getElementById('compLockAll').addEventListener('click', ()=>{ state.components.forEach(c=>c.locked=true); saveLocal(); updateCompActionsPosition(); refreshComponentList(); draw(); });
+document.getElementById('compUnlockAll').addEventListener('click', ()=>{ state.components.forEach(c=>c.locked=false); saveLocal(); updateCompActionsPosition(); refreshComponentList(); draw(); });
+
 function refreshWireList(){
+  refreshComponentList();
   const list = document.getElementById('wireList');
   document.getElementById('wireCount').textContent = state.wires.length;
   list.innerHTML='';
