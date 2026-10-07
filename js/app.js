@@ -227,8 +227,17 @@ function resolveWirePoint(pt){
 /* ---------------------------------------------------------------------
    4. ELECTRICAL MODEL — net computation
 --------------------------------------------------------------------- */
-function computeNets(){
+/* Parts (components and wires) are soldered on the face OPPOSITE to the one
+   they are placed on, so a part placed on the front is electrically attached
+   to the BACK copper (and vice versa). Each face therefore has its own,
+   independent net graph, built from that face's copper links only. */
+function oppositeFace(f){ return f==='back' ? 'front' : 'back'; }
+function solderFace(item){ return oppositeFace(item.face||'front'); }
+
+function computeNets(copperFace){
+  copperFace = copperFace || state.view.face;
   const uf = new UnionFind();
+  uf.face = copperFace;
   const b = state.board;
   function ensure(c,r){ uf.find(keyOf(c,r)); }
   // per-side links
@@ -262,8 +271,7 @@ function computeNets(){
       for(let c=0;c<cols;c++) for(let r=0;r<rows;r++){ if(!isRowGapped(r) && !isColGapped(c)) ensure(c,r); }
     }
   }
-  applyLink(b.linkFront);
-  applyLink(b.linkBack);
+  applyLink(copperFace==='front' ? b.linkFront : b.linkBack);
 
   // power rails: each rail line is one continuous net along its whole length
   function unionRail(row){
@@ -278,8 +286,9 @@ function computeNets(){
   if(b.railTop){ unionRail(-2); unionRail(-1); }
   if(b.railBottom){ unionRail(rows); unionRail(rows+1); }
 
-  // wires: bond all their points together (a hole spans both sides of the board)
+  // wires: bond all their points together, but only on the copper face they are soldered to
   state.wires.forEach(w=>{
+    if(solderFace(w)!==copperFace) return;
     let prev=null;
     w.points.forEach(pt=>{
       const h = resolveWirePoint(pt);
@@ -296,18 +305,49 @@ function computeNets(){
 
 function netMembersOf(uf,col,row){
   const root = uf.find(keyOf(col,row));
-  const members = {holes:[], pins:[]};
+  const members = {face:uf.face, holes:[], pins:[], wires:[]};
   for(let c=0;c<totalCols();c++) allRowIndices().forEach(r=>{
     const k = keyOf(c,r);
     if(uf.parent.has(k) && uf.find(k)===root) members.holes.push({col:c,row:r});
   });
+  // only parts soldered on this copper face belong to its nets
   state.components.forEach(comp=>{
+    if(solderFace(comp)!==uf.face) return;
     componentPinHoles(comp).forEach(h=>{
       const k = keyOf(h.col,h.row);
-      if(uf.parent.has(k) && uf.find(k)===root) members.pins.push({compId:comp.id,compLabel:comp.label,pinName:h.name,pinNumber:h.number,col:h.col,row:h.row});
+      if(uf.parent.has(k) && uf.find(k)===root) members.pins.push({compId:comp.id,compLabel:comp.label,compFace:comp.face||'front',pinName:h.name,pinNumber:h.number,col:h.col,row:h.row});
     });
   });
+  state.wires.forEach(w=>{
+    if(solderFace(w)!==uf.face) return;
+    const touches = w.points.some(pt=>{
+      const h = resolveWirePoint(pt);
+      return h && uf.parent.has(keyOf(h.col,h.row)) && uf.find(keyOf(h.col,h.row))===root;
+    });
+    if(touches) members.wires.push({id:w.id,color:w.color});
+  });
   return members;
+}
+
+/* every net (per copper face) that links at least two component pins */
+function computeConnections(){
+  const out = [];
+  ['front','back'].forEach(face=>{
+    const uf = computeNets(face);
+    const groups = new Map();
+    state.components.forEach(comp=>{
+      if(solderFace(comp)!==face) return;
+      componentPinHoles(comp).forEach(h=>{
+        const k = keyOf(h.col,h.row);
+        if(!uf.parent.has(k)) return;
+        const root = uf.find(k);
+        if(!groups.has(root)) groups.set(root,[]);
+        groups.get(root).push({comp, h});
+      });
+    });
+    groups.forEach(pins=>{ if(pins.length>=2) out.push({face, pins}); });
+  });
+  return out;
 }
 
 /* conflict detection: two components sharing the same hole */
@@ -345,6 +385,16 @@ function detectWarnings(){
   });
   segMap.forEach((ids)=>{
     if(ids.length>1) warns.push(`${ids.length} wires overlap exactly on the same segment and side.`);
+  });
+  // a wire only touches a pin if both are soldered on the same copper face
+  state.wires.forEach(w=>{
+    w.points.forEach(pt=>{
+      if(pt.ref!=='pin') return;
+      const comp = state.components.find(c=>c.id===pt.compId);
+      if(!comp || (comp.face||'front')===w.face) return;
+      const pinName = (componentPinHoles(comp)[pt.pinIndex]||{}).name || '?';
+      warns.push(`A wire placed on the ${w.face} (soldered on the ${solderFace(w)}) ends on ${comp.label}.${pinName}, but ${comp.label} is placed on the ${comp.face||'front'} (soldered on the ${solderFace(comp)}): they are not connected.`);
+    });
   });
   return warns;
 }
@@ -529,23 +579,33 @@ function draw(){
 
   // probe highlight
   if(state.ui.probeResult){
-    const members = state.ui.probeResult;
+    // viewed face's net: filled halo; other face's net: dashed ring
+    const res = state.ui.probeResult;
+    const viewed = res[state.view.face], other = res[oppositeFace(state.view.face)];
     ctx.save();
     ctx.strokeStyle = '#ffb020';
-    ctx.fillStyle = 'rgba(255,176,32,0.28)';
-    members.holes.forEach(h=>{
-      const p = holeToPixel(h.col,h.row);
-      ctx.beginPath(); ctx.arc(p.x,p.y,7,0,Math.PI*2); ctx.fill();
-    });
+    ctx.lineWidth = 1.6/state.view.zoom;
+    if(other){
+      ctx.setLineDash([3/state.view.zoom,3/state.view.zoom]);
+      other.holes.forEach(h=>{
+        const p = holeToPixel(h.col,h.row);
+        ctx.beginPath(); ctx.arc(p.x,p.y,8.5,0,Math.PI*2); ctx.stroke();
+      });
+      ctx.setLineDash([]);
+    }
+    if(viewed){
+      ctx.fillStyle = 'rgba(255,176,32,0.28)';
+      viewed.holes.forEach(h=>{
+        const p = holeToPixel(h.col,h.row);
+        ctx.beginPath(); ctx.arc(p.x,p.y,7,0,Math.PI*2); ctx.fill();
+      });
+    }
     ctx.restore();
   }
 
   // wires
   if(state.viewOpts.showWires){
-    state.wires.forEach(w=>{
-      if(w.face!==state.view.face && !state.viewOpts.showOtherSideWires) return;
-      drawWire(w, uf);
-    });
+    state.wires.forEach(w=>{ if(wireVisible(w)) drawWire(w, uf); });
   }
 
   // wire being drawn
@@ -778,10 +838,15 @@ function hitTestComponent(worldX,worldY){
   return null;
 }
 
+function wireVisible(w){
+  if(!state.viewOpts.showWires) return false;
+  return w.face===state.view.face || state.viewOpts.showOtherSideWires;
+}
 function hitTestWire(worldX,worldY){
   const thresh = 8/state.view.zoom;
   for(let i=state.wires.length-1;i>=0;i--){
     const w = state.wires[i];
+    if(!wireVisible(w)) continue;
     const pts = w.points.map(resolveWirePoint).filter(Boolean).map(p=>holeToPixel(p.col,p.row));
     for(let j=0;j<pts.length-1;j++){
       if(distToSeg(worldX,worldY,pts[j],pts[j+1])<thresh) return {wire:w, segIndex:j};
@@ -854,6 +919,8 @@ function onPointerDown(e){
       pts.forEach((p,i)=>{ const d=Math.hypot(p.x-world.x,p.y-world.y); if(d<bestD){bestD=d;bestI=i;} });
       pointerState.dragWire = wireHit.wire;
       pointerState.dragWireIndex = bestI;
+      pointerState.dragStartScreen = {x:pos.x, y:pos.y};
+      pointerState.dragMoved = false;
       return;
     }
     selectComponent(null); selectWire(null);
@@ -872,7 +939,7 @@ function onPointerDown(e){
 
     if(!state.ui.drawingWire){
       const color = document.getElementById('wRandomColor').checked ? randomWireColor() : document.getElementById('wManualColor').value;
-      state.ui.drawingWire = { id: uid('wire'), face: document.getElementById('wFace').value, color, points:[toWirePoint(target)] };
+      state.ui.drawingWire = { id: uid('wire'), face: state.view.face||'front', color, points:[toWirePoint(target)] };
     } else {
       state.ui.drawingWire.points.push(toWirePoint(target));
       if(isDoubleTap){
@@ -896,10 +963,10 @@ function onPointerDown(e){
   if(tool==='probe'){
     const target = pinOrHoleAtWorld(world.x,world.y);
     if(target){
-      const uf = computeNets();
-      const members = netMembersOf(uf, target.col, target.row);
-      state.ui.probeResult = members;
-      renderDebugResult(target, members);
+      const res = {};
+      ['front','back'].forEach(f=>{ res[f] = netMembersOf(computeNets(f), target.col, target.row); });
+      state.ui.probeResult = res;
+      renderDebugResult(target, res);
       draw();
     }
     return;
@@ -967,7 +1034,11 @@ function onPointerMove(e){
     const nh = nearestHole(targetX,targetY);
     if(nh){ pointerState.dragComp.col = nh.col; pointerState.dragComp.row = nh.row; draw(); }
   } else if(pointerState.mode==='dragWirePoint' && pointerState.dragWire){
-    const nh = nearestHole(world.x,world.y);
+    if(!pointerState.dragMoved){
+      const dist = Math.hypot(pos.x-pointerState.dragStartScreen.x, pos.y-pointerState.dragStartScreen.y);
+      if(dist>6) pointerState.dragMoved = true;
+    }
+    const nh = pointerState.dragMoved ? nearestHole(world.x,world.y) : null;
     if(nh){
       pointerState.dragWire.points[pointerState.dragWireIndex] = {ref:'hole', col:nh.col, row:nh.row};
       draw();
@@ -985,7 +1056,13 @@ function onPointerUp(e){
       saveLocal(); checkWarningsUI(); refreshWireList();
     }
   }
-  if(pointerState.mode==='dragWirePoint'){ saveLocal(); }
+  if(pointerState.mode==='dragWirePoint'){
+    if(!pointerState.dragMoved && pointerState.dragWire){
+      openWireModal(pointerState.dragWire.id);
+    } else {
+      saveLocal(); checkWarningsUI(); refreshWireList();
+    }
+  }
   if(activePointers.size===0) pointerState.mode=null;
 }
 
@@ -1076,7 +1153,7 @@ function showModal(id){ modalScrim.classList.add('show'); document.getElementByI
 function hideModal(id){ document.getElementById(id).classList.remove('show'); modalScrim.classList.remove('show'); }
 modalScrim.addEventListener('click', closeAllModals);
 function closeAllModals(){
-  ['compModal','fpModal','alertModal','confirmModal'].forEach(id=>document.getElementById(id).classList.remove('show'));
+  ['compModal','wireModal','fpModal','alertModal','confirmModal'].forEach(id=>document.getElementById(id).classList.remove('show'));
   modalScrim.classList.remove('show');
 }
 
@@ -1165,6 +1242,55 @@ document.getElementById('compModalDelete').addEventListener('click', ()=>{
     hideModal('compModal');
     removeComponent(id);
   });
+});
+
+/* ---- Wire edit modal ---- */
+let wireModalId = null;
+function refreshWireModal(){
+  const w = state.wires.find(x=>x.id===wireModalId);
+  if(!w) return;
+  const pts = w.points;
+  const bends = Math.max(0,pts.length-2);
+  document.getElementById('wireModalDesc').innerHTML =
+    `<span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${w.color};flex:0 0 auto;"></span>` +
+    `<span>${escapeXml(describeWirePoint(pts[0]))} → ${escapeXml(describeWirePoint(pts[pts.length-1]))}${bends?' · '+bends+' bend(s)':''}</span>`;
+  document.getElementById('wireModalColor').value = /^#[0-9a-f]{6}$/i.test(w.color) ? w.color : '#3763e8';
+  document.getElementById('wireModalFace').value = w.face;
+}
+function openWireModal(id){
+  const w = state.wires.find(x=>x.id===id);
+  if(!w) return;
+  wireModalId = id;
+  selectWire(id);
+  refreshWireModal();
+  showModal('wireModal');
+}
+function closeWireModal(){ hideModal('wireModal'); selectWire(null); }
+document.getElementById('wireModalClose').addEventListener('click', closeWireModal);
+document.getElementById('wireModalDone').addEventListener('click', closeWireModal);
+document.getElementById('wireModalColor').addEventListener('input', function(){
+  const w = state.wires.find(x=>x.id===wireModalId);
+  if(!w) return;
+  w.color = this.value;
+  saveLocal(); refreshWireList(); refreshWireModal(); draw();
+});
+document.getElementById('wireModalRandom').addEventListener('click', ()=>{
+  const w = state.wires.find(x=>x.id===wireModalId);
+  if(!w) return;
+  w.color = randomWireColor();
+  saveLocal(); refreshWireList(); refreshWireModal(); draw();
+});
+document.getElementById('wireModalFace').addEventListener('change', function(){
+  const w = state.wires.find(x=>x.id===wireModalId);
+  if(!w) return;
+  w.face = this.value;
+  saveLocal(); checkWarningsUI(); refreshWireList(); draw();
+});
+document.getElementById('wireModalDelete').addEventListener('click', ()=>{
+  const id = wireModalId;
+  if(!id) return;
+  hideModal('wireModal');
+  removeWire(id);
 });
 
 /* ---- Custom footprint creation modal ---- */
@@ -1474,7 +1600,7 @@ function refreshWireList(){
     delBtn.innerHTML='✕';
     delBtn.addEventListener('click', ()=>removeWire(w.id));
     div.appendChild(delBtn);
-    div.addEventListener('click', (e)=>{ if(e.target===delBtn) return; selectWire(w.id); });
+    div.addEventListener('click', (e)=>{ if(e.target===delBtn) return; openWireModal(w.id); });
     list.appendChild(div);
   });
   renderConnectionList();
@@ -1484,26 +1610,32 @@ function refreshWireList(){
 function renderConnectionList(){
   const box = document.getElementById('conn-list');
   if(!box) return;
-  document.getElementById('connCount').textContent = state.wires.length;
-  if(!state.wires.length){ box.innerHTML = '<div class="empty-note">No wires placed yet.</div>'; return; }
-  box.innerHTML = state.wires.map(w=>{
-    const from = describeWirePoint(w.points[0]);
-    const to = describeWirePoint(w.points[w.points.length-1]);
-    return `<div class="net-member"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${w.color};flex:0 0 auto;"></span>${from} → ${to} <span class="badge" style="margin-left:auto;">${w.face==='front'?'front':'back'}</span></div>`;
+  const conns = computeConnections();
+  document.getElementById('connCount').textContent = conns.length;
+  if(!conns.length){ box.innerHTML = '<div class="empty-note">No pin-to-pin connections yet.</div>'; return; }
+  box.innerHTML = conns.map(c=>{
+    const txt = c.pins.map(p=>`${escapeXml(p.comp.label)} / ${escapeXml(p.h.name)}`).join(' ↔ ');
+    return `<div class="net-member"><span>${txt}</span> <span class="badge" style="margin-left:auto;">${c.face} copper</span></div>`;
   }).join('');
 }
-function renderDebugResult(target, members){
+function renderDebugResult(target, res){
   const box = document.getElementById('debug-result');
   box.classList.remove('empty');
-  let html = `<div style="margin-bottom:8px;"><span class="badge">${target.label}</span></div>`;
-  html += `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px;">${members.holes.length} holes · ${members.pins.length} connected pins in this net</div>`;
-  if(members.pins.length){
-    members.pins.forEach(p=>{
-      html += `<div class="net-member"><span class="badge">#${p.pinNumber} · ${p.pinName}</span> ${p.compLabel} — hole (${p.col},${p.row})</div>`;
-    });
-  } else {
-    html += `<div class="net-member">No component pin on this net (just bare holes).</div>`;
-  }
+  let html = `<div style="margin-bottom:8px;"><span class="badge">${escapeXml(target.label)}</span></div>`;
+  // the viewed face first, then the other copper face
+  [state.view.face, oppositeFace(state.view.face)].forEach(face=>{
+    const m = res[face];
+    if(!m) return;
+    html += `<div class="section-title" style="margin:10px 0 4px;">${face} copper <span style="font-weight:400;color:var(--ink-faint);">(parts placed on the ${oppositeFace(face)} are soldered here)</span></div>`;
+    html += `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px;">${m.holes.length} holes · ${m.pins.length} pins · ${m.wires.length} wires</div>`;
+    if(m.pins.length){
+      m.pins.forEach(p=>{
+        html += `<div class="net-member"><span class="badge">#${p.pinNumber} · ${escapeXml(p.pinName)}</span> ${escapeXml(p.compLabel)} — hole (${p.col},${p.row})</div>`;
+      });
+    } else {
+      html += `<div class="net-member">No component pin attached on this face.</div>`;
+    }
+  });
   box.innerHTML = html;
 }
 document.getElementById('dbgNetColors').addEventListener('change', function(){

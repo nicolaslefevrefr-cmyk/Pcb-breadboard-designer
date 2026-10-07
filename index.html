@@ -136,13 +136,6 @@
       <!-- WIRES PANEL -->
       <div class="panel" id="panel-wires">
         <p class="section-title">New wire</p>
-        <div class="field">
-          <label>Placement side</label>
-          <select id="wFace">
-            <option value="front">Front side</option>
-            <option value="back">Back side</option>
-          </select>
-        </div>
         <div class="check-row">
           <input type="checkbox" id="wRandomColor" checked>
           <label for="wRandomColor">Random color for each new wire</label>
@@ -272,6 +265,36 @@
     <button class="btn ghost small" id="compModalRotate">Rotate</button>
     <button class="btn ghost small" id="compModalMirror">Mirror</button>
     <button class="btn danger small" id="compModalDelete">Delete</button>
+  </div>
+</div>
+
+<div class="modal" id="wireModal">
+  <div class="modal-head">
+    <h3 id="wireModalTitle">Wire</h3>
+    <button class="iconbtn" id="wireModalClose" aria-label="Close">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="modal-body">
+    <div class="net-member" id="wireModalDesc" style="margin-bottom:12px;"></div>
+    <div class="field">
+      <label>Color</label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="color" id="wireModalColor" style="width:52px;height:40px;padding:2px;border:1px solid var(--panel-border);border-radius:9px;background:#fbfbfc;">
+        <button class="btn ghost small" id="wireModalRandom" style="flex:0 0 auto;">Random</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Side</label>
+      <select id="wireModalFace">
+        <option value="front">Front side</option>
+        <option value="back">Back side</option>
+      </select>
+    </div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn ghost" id="wireModalDone">Done</button>
+    <button class="btn danger" id="wireModalDelete">Delete</button>
   </div>
 </div>
 
