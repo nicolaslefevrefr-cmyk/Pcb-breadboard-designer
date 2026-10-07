@@ -114,6 +114,10 @@
           <input type="checkbox" id="vShowOtherWires" checked>
           <label for="vShowOtherWires">Show wires from the other side</label>
         </div>
+        <div class="check-row">
+          <input type="checkbox" id="vOpaqueBodies">
+          <label for="vOpaqueBodies">Opaque component bodies</label>
+        </div>
       </div>
 
       <!-- LIBRARY PANEL -->
@@ -225,7 +229,7 @@
         <button class="tool-btn" data-tool="wire" title="Place a wire">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM18 16a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/><path d="M6 8v3a5 5 0 0 0 5 5h1"/></svg>
         </button>
-        <button class="tool-btn" data-tool="bend" title="Add a bend to a wire">
+        <button class="tool-btn" data-tool="bend" title="Bend wires (beta): tap a wire to add a visual bend, or drag a wire to curve it. Bends are never electrical.">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V9a4 4 0 0 1 4-4h10"/><path d="m15 2 4 3-4 3"/></svg>
         </button>
         <button class="tool-btn" data-tool="probe" title="Debug probe">
@@ -307,6 +311,7 @@
   </div>
   <div class="modal-body">
     <div class="modal-preview" id="fpModalPreview"></div>
+    <div style="display:flex;justify-content:flex-end;margin:-6px 0 12px;"><button class="btn ghost small" id="fpBodyReset" type="button">Reset body size</button></div>
     <div class="field"><label>Name</label><input type="text" id="fpName" placeholder="e.g. 4-channel relay module"></div>
     <div class="row2">
       <div class="field"><label>Pins — top row</label><input type="number" id="fpTop" min="0" max="60" value="4"></div>
@@ -341,8 +346,6 @@
   </div>
 </div>
 
-
-</body>
 <script src="js/app.js"></script>
 <script>
 if ('serviceWorker' in navigator) {

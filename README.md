@@ -19,10 +19,12 @@ overlaps.
   count per side, grid-based pin spacing, per-pin number and name), with a
   live SVG preview.
 - Jumpers/cables: link any hole or pin to any other, chosen per face,
-  draggable, with addable bends and randomized colors. Wires stay attached
+  draggable, with randomized colors. Bends (beta) are purely visual waypoints: only a wire's two ends are electrical. Wires stay attached
   to a component's pins and follow it when it is moved.
+- Custom components have an independent body rectangle: in the editor, drag it to move it or drag a blue corner to resize it (saved in the JSON project/library).
 - Tap a placed component to open a preview/edit window (label, rotate,
   mirror, delete) showing its pins, numbers and names.
+- Debug probe: follows the copper face where the parts at the probed hole are soldered (opposite to their placement side), regardless of the viewed side.
 - Debug mode: highlight a net, list every individual connection (e.g.
   "esp32 / gpio3 -> dfplayer / gpio2"), and flag overlapping points.
 - Full project save/export/import as JSON, including custom footprints.

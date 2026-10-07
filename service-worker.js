@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pcb-breadboard-v2';
+const CACHE_NAME = 'pcb-breadboard-v5';
 const APP_SHELL = [
   './',
   './index.html',
