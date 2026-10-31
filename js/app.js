@@ -111,12 +111,12 @@ STD_LIBRARY.forEach(fp=>{
    2. APPLICATION STATE
 --------------------------------------------------------------------- */
 const state = {
-  board:{ cols:30, rows:20, spacingMm:2.54, gapRow:0, gapCol:0, gapRowWidth:1, gapColWidth:1, linkFront:'none', linkBack:'none', railTop:false, railBottom:false },
+  board:{ cols:30, rows:20, spacingMm:2.54, gapRow:0, gapCol:0, gapRowWidth:1, gapColWidth:1, linkFront:'none', linkBack:'none', railTop:false, railBottom:false, reverseColNumbers:false, wireLengthFactor:1 },
   components:[],   // {id, fpId, col,row, rot, mirror, face, label}
   customFootprints:{}, // id -> footprint def
   wires:[],        // {id, face, color, points:[{ref:'hole',col,row}|{ref:'pin',compId,pinIndex}]}
   view:{ zoom:1, ox:0, oy:0, face:'front' },
-  viewOpts:{ showPinNumbers:true, showPinNames:true, showCompLabels:true, showWires:true, showOtherSideComponents:true, showOtherSideWires:true, opaqueBodies:false },
+  viewOpts:{ showPinNumbers:true, showPinNames:true, showCompLabels:true, showWires:true, showOtherSideComponents:true, showOtherSideWires:true, opaqueBodies:false, showColNumbers:true, showWireLengths:true },
   ui:{ tool:'select', selectedComponent:null, selectedFootprintToPlace:null, drawingWire:null, probeResult:null, showNetColors:false }
 };
 
@@ -268,6 +268,14 @@ function wirePointPixel(pt){
   if(pt.ref==='free') return {x:pt.x,y:pt.y};
   const h = resolveWirePoint(pt);
   return h ? holeToPixel(h.col,h.row) : null;
+}
+/* indicative wire length in inches, from the drawn path (bends included) */
+function wireLengthIn(w){
+  const px = wirePixels(w);
+  let len=0;
+  for(let i=0;i<px.length-1;i++) len += Math.hypot(px[i+1].x-px[i].x, px[i+1].y-px[i].y);
+  const mm = len/GRID_PX * (state.board.spacingMm||2.54);
+  return mm/25.4 * (state.board.wireLengthFactor||1);
 }
 function wirePixels(w){ return w.points.map(wirePointPixel).filter(Boolean); }
 /* only the first and last points of a wire are electrical */
@@ -627,6 +635,23 @@ function draw(){
   if(b.railBottom){ drawRailLine(totalR,'#e0524a','+'); drawRailLine(totalR+1,'#3a3f47','−'); }
   ctx.restore();
 
+  // column numbers (horizontal), above and below the hole grid
+  if(state.viewOpts.showColNumbers && state.view.zoom>0.4){
+    ctx.save();
+    ctx.font = '600 9px -apple-system,Segoe UI,Roboto,sans-serif';
+    ctx.fillStyle = '#8b93a1'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const yTop = holeY(0)-GRID_PX*0.5, yBot = holeY(totalR-1)+GRID_PX*0.5;
+    let idx=0;
+    for(let c=0;c<totalC;c++){
+      if(isColGapped(c)) continue;
+      idx++;
+      const label = b.reverseColNumbers ? (b.cols-idx+1) : idx;
+      ctx.fillText(String(label), holeX(c), yTop);
+      ctx.fillText(String(label), holeX(c), yBot);
+    }
+    ctx.restore();
+  }
+
   // probe highlight
   if(state.ui.probeResult){
     // fixed styling per copper face (independent of the viewed side):
@@ -731,6 +756,22 @@ function drawWire(w, uf, isDrawing){
     else ctx.rect(p.x-2.8,p.y-2.8,5.6,5.6); // square handle = visual bend, not a connection
     ctx.fill();
   });
+  if(state.viewOpts.showWireLengths && state.view.zoom>0.5 && px.length>1){
+    // label centered on the path (by length), just above it, in the wire color
+    let total=0; for(let i=0;i<px.length-1;i++) total += Math.hypot(px[i+1].x-px[i].x, px[i+1].y-px[i].y);
+    let acc=0, half = total/2, mx=px[0].x, my=px[0].y;
+    for(let i=0;i<px.length-1;i++){
+      const sl = Math.hypot(px[i+1].x-px[i].x, px[i+1].y-px[i].y);
+      if(acc+sl>=half && sl>0){ const t=(half-acc)/sl; mx=px[i].x+(px[i+1].x-px[i].x)*t; my=px[i].y+(px[i+1].y-px[i].y)*t; break; }
+      acc+=sl;
+    }
+    ctx.font = '700 9.5px -apple-system,Segoe UI,Roboto,sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='bottom';
+    const txt = wireLengthIn(w).toFixed(2)+' in';
+    ctx.lineJoin='round'; ctx.lineWidth=3; ctx.strokeStyle='rgba(255,255,255,0.92)';
+    ctx.strokeText(txt,mx,my-5);
+    ctx.fillStyle = strokeCol; ctx.fillText(txt,mx,my-5);
+  }
   if(w.locked && px.length>1){ const m=px[Math.floor((px.length-1)/2)], n=px[Math.floor((px.length-1)/2)+1]||m; drawPadlock((m.x+n.x)/2,(m.y+n.y)/2-8); }
   if(w.selected){
     ctx.strokeStyle = '#1c2430'; ctx.lineWidth=1/state.view.zoom;
@@ -1049,9 +1090,19 @@ function onPointerDown(e){
   }
 
   if(tool==='bend'){
+    // tapping an existing bend removes it
+    for(const w of state.wires){
+      if(!wireVisible(w) || w.locked) continue;
+      for(let i=1;i<w.points.length-1;i++){
+        const bp = w.points[i];
+        if(bp.ref==='free' && Math.hypot(bp.x-world.x,bp.y-world.y) < 10/state.view.zoom){
+          w.points.splice(i,1); saveLocal(); refreshWireList(); checkWarningsUI(); draw(); return;
+        }
+      }
+    }
     const wireHit = hitTestWire(world.x,world.y);
+    if(wireHit && wireHit.wire.locked){ statusPill('Wire is locked'); return; }
     if(wireHit){
-      const h = nearestHole(world.x,world.y);
       wireHit.wire.points.splice(wireHit.segIndex+1,0, {ref:'free',x:world.x,y:world.y});
       saveLocal(); refreshWireList(); draw();
     }
@@ -1213,6 +1264,7 @@ function onPointerMove(e){
   }
 }
 
+let lastBendTap = null;
 function onPointerUp(e){
   activePointers.delete(e.pointerId);
   if(activePointers.size<2) pointerState.pinch=null;
@@ -1224,7 +1276,16 @@ function onPointerUp(e){
     }
   }
   if(pointerState.mode==='dragWirePoint'){
-    if(!pointerState.dragMoved && pointerState.dragWire){
+    const dw = pointerState.dragWire, di = pointerState.dragWireIndex;
+    const onBend = dw && di>0 && di<dw.points.length-1 && dw.points[di].ref==='free';
+    if(!pointerState.dragMoved && onBend){
+      // tap on a bend handle: double tap removes it, single tap only keeps the wire selected
+      const now = Date.now();
+      if(lastBendTap && lastBendTap.id===dw.id && lastBendTap.idx===di && now-lastBendTap.t<450 && !dw.locked){
+        dw.points.splice(di,1); lastBendTap=null;
+        saveLocal(); refreshWireList(); checkWarningsUI(); draw();
+      } else lastBendTap = {id:dw.id, idx:di, t:now};
+    } else if(!pointerState.dragMoved && pointerState.dragWire){
       openWireModal(pointerState.dragWire.id);
     } else {
       saveLocal(); checkWarningsUI(); refreshWireList();
@@ -1443,7 +1504,8 @@ function refreshWireModal(){
   const bends = Math.max(0,pts.length-2);
   document.getElementById('wireModalDesc').innerHTML =
     `<span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${w.color};flex:0 0 auto;"></span>` +
-    `<span>${escapeXml(describeWirePoint(pts[0]))} → ${escapeXml(describeWirePoint(pts[pts.length-1]))}${bends?' · '+bends+' bend(s)':''}</span>`;
+    `<span>${escapeXml(describeWirePoint(pts[0]))} → ${escapeXml(describeWirePoint(pts[pts.length-1]))}${bends?' · '+bends+' bend(s)':''} · ${wireLengthIn(w).toFixed(2)} in</span>`;
+  document.getElementById('wireModalStraight').style.display = bends ? '' : 'none';
   renderSwatches(document.getElementById('wireModalSwatches'), w.color, hex=>{ w.color=hex; saveLocal(); refreshWireList(); refreshWireModal(); draw(); });
   document.getElementById('wireModalLocked').checked = !!w.locked;
   document.getElementById('wireModalFace').value = w.face;
@@ -1459,6 +1521,13 @@ function openWireModal(id){
 function closeWireModal(){ hideModal('wireModal'); selectWire(null); }
 document.getElementById('wireModalClose').addEventListener('click', closeWireModal);
 document.getElementById('wireModalDone').addEventListener('click', closeWireModal);
+document.getElementById('wireModalStraight').addEventListener('click', ()=>{
+  const w = state.wires.find(x=>x.id===wireModalId);
+  if(!w) return;
+  if(w.locked){ statusPill('Wire is locked'); return; }
+  w.points = [w.points[0], w.points[w.points.length-1]];
+  saveLocal(); refreshWireList(); checkWarningsUI(); refreshWireModal(); draw();
+});
 document.getElementById('wireModalLocked').addEventListener('change', function(){
   const w = state.wires.find(x=>x.id===wireModalId);
   if(!w) return;
@@ -1711,7 +1780,9 @@ const VIEW_OPT_MAP = {
   vShowWires: 'showWires',
   vShowOtherComponents: 'showOtherSideComponents',
   vShowOtherWires: 'showOtherSideWires',
-  vOpaqueBodies: 'opaqueBodies'
+  vOpaqueBodies: 'opaqueBodies',
+  vShowColNumbers: 'showColNumbers',
+  vShowWireLengths: 'showWireLengths'
 };
 Object.keys(VIEW_OPT_MAP).forEach(id=>{
   const el = document.getElementById(id);
@@ -1728,6 +1799,15 @@ function loadViewFormFromState(){
   updateCurrentFaceLabel();
 }
 
+document.getElementById('bReverseNumbers').addEventListener('change', function(){
+  state.board.reverseColNumbers = this.checked; saveLocal(); draw();
+});
+document.getElementById('bWireFactor').addEventListener('change', function(){
+  const v = parseFloat(this.value);
+  state.board.wireLengthFactor = (isFinite(v) && v>0) ? v : 1;
+  this.value = state.board.wireLengthFactor;
+  saveLocal(); refreshWireList(); if(wireModalId) refreshWireModal(); draw();
+});
 document.getElementById('wRandomColor').addEventListener('change', function(){
   document.getElementById('wManualColorField').style.display = this.checked? 'none':'block';
 });
@@ -1740,6 +1820,8 @@ function loadBoardFormFromState(){
   document.getElementById('bSpacingMm').value = state.board.spacingMm;
   document.getElementById('bGapRow').value = state.board.gapRow;
   document.getElementById('bGapCol').value = state.board.gapCol;
+  document.getElementById('bReverseNumbers').checked = !!state.board.reverseColNumbers;
+  document.getElementById('bWireFactor').value = state.board.wireLengthFactor||1;
   document.getElementById('bGapRowWidth').value = state.board.gapRowWidth||1;
   document.getElementById('bGapColWidth').value = state.board.gapColWidth||1;
   document.getElementById('bLinkFront').value = state.board.linkFront;
@@ -1985,11 +2067,11 @@ function loadLocal(){
   }catch(e){ return false; }
 }
 function applyProject(data){
-  state.board = Object.assign({cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false}, data.board||{});
+  state.board = Object.assign({cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false,reverseColNumbers:false,wireLengthFactor:1}, data.board||{});
   state.components = (data.components||[]).map(c=>({face:'front', ...c}));
   state.customFootprints = data.customFootprints||{};
   state.wires = (data.wires||[]).map(w=>({...w, points:toBendPoints(w.points||[]), selected:false}));
-  state.viewOpts = Object.assign({showPinNumbers:true, showPinNames:true, showCompLabels:true, showWires:true, showOtherSideComponents:true, showOtherSideWires:true, opaqueBodies:false}, data.viewOpts||{});
+  state.viewOpts = Object.assign({showPinNumbers:true, showPinNames:true, showCompLabels:true, showWires:true, showOtherSideComponents:true, showOtherSideWires:true, opaqueBodies:false,showColNumbers:true,showWireLengths:true}, data.viewOpts||{});
   loadBoardFormFromState();
   loadViewFormFromState();
   renderCustomFpList();
@@ -2059,7 +2141,7 @@ document.getElementById('exportPngBtn').addEventListener('click', ()=>{
 });
 document.getElementById('resetBtn').addEventListener('click', ()=>{
   showConfirm('Reset the board, placed components and wires? Your custom component library will be kept. This cannot be undone.', ()=>{
-    state.board = {cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false};
+    state.board = {cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false,reverseColNumbers:false,wireLengthFactor:1};
     state.components=[]; state.wires=[]; state.ui.selectedComponent=null;
     loadBoardFormFromState(); refreshWireList(); checkWarningsUI();
     saveLocal(); fitBoardToView();
