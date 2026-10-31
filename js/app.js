@@ -111,7 +111,7 @@ STD_LIBRARY.forEach(fp=>{
    2. APPLICATION STATE
 --------------------------------------------------------------------- */
 const state = {
-  board:{ cols:30, rows:20, spacingMm:2.54, gapRow:0, gapCol:0, gapRowWidth:1, gapColWidth:1, linkFront:'none', linkBack:'none', railTop:false, railBottom:false, reverseColNumbers:false, wireLengthFactor:1 },
+  board:{ cols:30, rows:20, spacingMm:2.54, gapRow:0, gapCol:0, gapRowWidth:1, gapColWidth:1, linkFront:'none', linkBack:'none', railTop:false, railBottom:false, reverseColNumbers:false, wireLengthFactor:1, railSwap:false },
   components:[],   // {id, fpId, col,row, rot, mirror, face, label}
   customFootprints:{}, // id -> footprint def
   wires:[],        // {id, face, color, points:[{ref:'hole',col,row}|{ref:'pin',compId,pinIndex}]}
@@ -192,8 +192,9 @@ function allRowIndices(){
 }
 function railKind(row){ // 'plus' | 'gnd' | null
   const rows = totalRows();
-  if(row===-2||row===rows) return 'plus';
-  if(row===-1||row===rows+1) return 'gnd';
+  const swap = !!state.board.railSwap; // swapped: the outer line is GND, the inner one +V
+  if(row===-2||row===rows) return swap ? 'gnd' : 'plus';
+  if(row===-1||row===rows+1) return swap ? 'plus' : 'gnd';
   return null;
 }
 
@@ -631,8 +632,9 @@ function draw(){
       ctx.fillText(label, holeX(0)-GRID_PX*0.7, y);
     }
   }
-  if(b.railTop){ drawRailLine(-2,'#e0524a','+'); drawRailLine(-1,'#3a3f47','−'); }
-  if(b.railBottom){ drawRailLine(totalR,'#e0524a','+'); drawRailLine(totalR+1,'#3a3f47','−'); }
+  function railLine(row){ const plus = railKind(row)==='plus'; drawRailLine(row, plus?'#e0524a':'#3a3f47', plus?'+':'−'); }
+  if(b.railTop){ railLine(-2); railLine(-1); }
+  if(b.railBottom){ railLine(totalR); railLine(totalR+1); }
   ctx.restore();
 
   // column numbers (horizontal), above and below the hole grid
@@ -1802,6 +1804,9 @@ function loadViewFormFromState(){
 document.getElementById('bReverseNumbers').addEventListener('change', function(){
   state.board.reverseColNumbers = this.checked; saveLocal(); draw();
 });
+document.getElementById('bRailSwap').addEventListener('change', function(){
+  state.board.railSwap = this.checked; saveLocal(); checkWarningsUI(); refreshWireList(); draw();
+});
 document.getElementById('bWireFactor').addEventListener('change', function(){
   const v = parseFloat(this.value);
   state.board.wireLengthFactor = (isFinite(v) && v>0) ? v : 1;
@@ -1821,6 +1826,7 @@ function loadBoardFormFromState(){
   document.getElementById('bGapRow').value = state.board.gapRow;
   document.getElementById('bGapCol').value = state.board.gapCol;
   document.getElementById('bReverseNumbers').checked = !!state.board.reverseColNumbers;
+  document.getElementById('bRailSwap').checked = !!state.board.railSwap;
   document.getElementById('bWireFactor').value = state.board.wireLengthFactor||1;
   document.getElementById('bGapRowWidth').value = state.board.gapRowWidth||1;
   document.getElementById('bGapColWidth').value = state.board.gapColWidth||1;
@@ -2067,7 +2073,7 @@ function loadLocal(){
   }catch(e){ return false; }
 }
 function applyProject(data){
-  state.board = Object.assign({cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false,reverseColNumbers:false,wireLengthFactor:1}, data.board||{});
+  state.board = Object.assign({cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false,reverseColNumbers:false,wireLengthFactor:1,railSwap:false}, data.board||{});
   state.components = (data.components||[]).map(c=>({face:'front', ...c}));
   state.customFootprints = data.customFootprints||{};
   state.wires = (data.wires||[]).map(w=>({...w, points:toBendPoints(w.points||[]), selected:false}));
@@ -2141,7 +2147,7 @@ document.getElementById('exportPngBtn').addEventListener('click', ()=>{
 });
 document.getElementById('resetBtn').addEventListener('click', ()=>{
   showConfirm('Reset the board, placed components and wires? Your custom component library will be kept. This cannot be undone.', ()=>{
-    state.board = {cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false,reverseColNumbers:false,wireLengthFactor:1};
+    state.board = {cols:30,rows:20,spacingMm:2.54,gapRow:0,gapCol:0,gapRowWidth:1,gapColWidth:1,linkFront:'none',linkBack:'none',railTop:false,railBottom:false,reverseColNumbers:false,wireLengthFactor:1,railSwap:false};
     state.components=[]; state.wires=[]; state.ui.selectedComponent=null;
     loadBoardFormFromState(); refreshWireList(); checkWarningsUI();
     saveLocal(); fitBoardToView();
