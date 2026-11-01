@@ -218,9 +218,17 @@ function componentPinHoles(comp){
     const o = ov[idx] || {};
     const name = (o.name!==undefined && o.name!=='') ? o.name : p.name;
     const number = (o.number!==undefined && o.number!=='') ? o.number : (p.number!==undefined?p.number:idx+1);
+    if(comp.floating){
+      // floating part: pins live in world pixels, not on the hole grid
+      return {col:null,row:null,floating:true,key:'f:'+comp.id+':'+idx,x:(comp.x||0)+r.dx*GRID_PX,y:(comp.y||0)+r.dy*GRID_PX,name,number,index:idx};
+    }
     return {col:comp.col+r.dx, row:comp.row+r.dy, name, number, index:idx};
   });
 }
+/* node key of a pin / hole in the net graph */
+function holeKey(h){ return h.key || keyOf(h.col,h.row); }
+function pinPixel(h){ return h.floating ? {x:h.x,y:h.y} : holeToPixel(h.col,h.row); }
+function compAnchorPixel(comp){ return comp.floating ? {x:comp.x||0,y:comp.y||0} : holeToPixel(comp.col,comp.row); }
 
 /* Body rectangle of a footprint, in cells relative to pin (0,0).
    Custom footprints may store an explicit `body` {x0,y0,x1,y1}; otherwise it is derived from the pins. */
@@ -239,12 +247,13 @@ function componentBodyRect(comp){
   const b = footprintBody(fp);
   const a = rotatePin(b.x0,b.y0,comp.rot||0,comp.mirror||false);
   const c = rotatePin(b.x1,b.y1,comp.rot||0,comp.mirror||false);
-  const anchor = holeToPixel(comp.col,comp.row);
+  const anchor = compAnchorPixel(comp);
   const dx0=Math.min(a.dx,c.dx), dx1=Math.max(a.dx,c.dx), dy0=Math.min(a.dy,c.dy), dy1=Math.max(a.dy,c.dy);
   return {bx:anchor.x+dx0*GRID_PX, by:anchor.y+dy0*GRID_PX, bw:(dx1-dx0)*GRID_PX, bh:(dy1-dy0)*GRID_PX};
 }
 
 function componentBounds(comp){
+  if(comp.floating) return {minC:0,maxC:0,minR:0,maxR:0};
   const holes = componentPinHoles(comp);
   let minC=Infinity,maxC=-Infinity,minR=Infinity,maxR=-Infinity;
   holes.forEach(h=>{ minC=Math.min(minC,h.col); maxC=Math.max(maxC,h.col); minR=Math.min(minR,h.row); maxR=Math.max(maxR,h.row); });
@@ -259,6 +268,7 @@ function resolveWirePoint(pt){
     const holes = componentPinHoles(comp);
     const h = holes[pt.pinIndex];
     if(!h) return null;
+    if(h.floating) return {col:null,row:null,floating:true,key:h.key,x:h.x,y:h.y};
     return {col:h.col,row:h.row};
   }
   if(pt.ref==='free') return null; // free waypoint: purely visual, never electrical
@@ -268,7 +278,8 @@ function resolveWirePoint(pt){
 function wirePointPixel(pt){
   if(pt.ref==='free') return {x:pt.x,y:pt.y};
   const h = resolveWirePoint(pt);
-  return h ? holeToPixel(h.col,h.row) : null;
+  if(!h) return null;
+  return h.floating ? {x:h.x,y:h.y} : holeToPixel(h.col,h.row);
 }
 /* indicative wire length in inches, from the drawn path (bends included) */
 function wireLengthIn(w){
@@ -353,8 +364,8 @@ function computeNets(copperFace){
     if(solderFace(w)!==copperFace) return;
     let prev=null;
     wireEnds(w).forEach(h=>{
-      ensure(h.col,h.row);
-      const k = keyOf(h.col,h.row);
+      const k = holeKey(h);
+      uf.find(k);
       if(prev) uf.union(prev,k);
       prev = k;
     });
@@ -363,8 +374,8 @@ function computeNets(copperFace){
   return uf;
 }
 
-function netMembersOf(uf,col,row){
-  const root = uf.find(keyOf(col,row));
+function netMembersOf(uf,col,row,key){
+  const root = uf.find(key || keyOf(col,row));
   const members = {face:uf.face, holes:[], pins:[], wires:[]};
   for(let c=0;c<totalCols();c++) allRowIndices().forEach(r=>{
     const k = keyOf(c,r);
@@ -372,16 +383,16 @@ function netMembersOf(uf,col,row){
   });
   // only parts soldered on this copper face belong to its nets
   state.components.forEach(comp=>{
-    if(solderFace(comp)!==uf.face) return;
+    if(!comp.floating && solderFace(comp)!==uf.face) return;
     componentPinHoles(comp).forEach(h=>{
-      const k = keyOf(h.col,h.row);
-      if(uf.parent.has(k) && uf.find(k)===root) members.pins.push({compId:comp.id,compLabel:comp.label,compFace:comp.face||'front',pinName:h.name,pinNumber:h.number,col:h.col,row:h.row});
+      const k = holeKey(h);
+      if(uf.parent.has(k) && uf.find(k)===root) members.pins.push({compId:comp.id,compLabel:comp.label,compFace:comp.face||'front',pinName:h.name,pinNumber:h.number,col:h.col,row:h.row,floating:!!h.floating});
     });
   });
   state.wires.forEach(w=>{
     if(solderFace(w)!==uf.face) return;
     const touches = wireEnds(w).some(h=>{
-      return h && uf.parent.has(keyOf(h.col,h.row)) && uf.find(keyOf(h.col,h.row))===root;
+      return h && uf.parent.has(holeKey(h)) && uf.find(holeKey(h))===root;
     });
     if(touches) members.wires.push({id:w.id,color:w.color});
   });
@@ -395,9 +406,9 @@ function computeConnections(){
     const uf = computeNets(face);
     const groups = new Map();
     state.components.forEach(comp=>{
-      if(solderFace(comp)!==face) return;
+      if(!comp.floating && solderFace(comp)!==face) return;
       componentPinHoles(comp).forEach(h=>{
-        const k = keyOf(h.col,h.row);
+        const k = holeKey(h);
         if(!uf.parent.has(k)) return;
         const root = uf.find(k);
         if(!groups.has(root)) groups.set(root,[]);
@@ -414,6 +425,7 @@ function detectWarnings(){
   const warns = [];
   const occ = new Map(); // key -> [ {compId,pinName} ]
   state.components.forEach(comp=>{
+    if(comp.floating) return;
     componentPinHoles(comp).forEach(h=>{
       if(isRowGapped(h.row) || isColGapped(h.col)){
         warns.push(`${comp.label}.${h.name} (#${h.number}) falls in the center gap: there is no hole there.`);
@@ -450,7 +462,7 @@ function detectWarnings(){
     w.points.forEach(pt=>{
       if(pt.ref!=='pin') return;
       const comp = state.components.find(c=>c.id===pt.compId);
-      if(!comp || (comp.face||'front')===w.face) return;
+      if(!comp || comp.floating || (comp.face||'front')===w.face) return;
       const pinName = (componentPinHoles(comp)[pt.pinIndex]||{}).name || '?';
       warns.push(`A wire placed on the ${w.face} (soldered on the ${solderFace(w)}) ends on ${comp.label}.${pinName}, but ${comp.label} is placed on the ${comp.face||'front'} (soldered on the ${solderFace(comp)}): they are not connected.`);
     });
@@ -532,6 +544,11 @@ function describeHole(col,row){
 function describeWirePoint(pt){
   const h = resolveWirePoint(pt);
   if(!h) return '?';
+  if(h.floating){
+    const comp = state.components.find(c=>c.id===pt.compId);
+    const ph = comp ? componentPinHoles(comp)[pt.pinIndex] : null;
+    return ph ? `${comp.label}.${ph.name} (#${ph.number})` : '?';
+  }
   return describeHole(h.col,h.row);
 }
 
@@ -800,11 +817,11 @@ function drawComponent(comp, selected){
   if(!fp) return;
   if(comp.hidden) return;
   const compFace = comp.face || 'front';
-  const otherSide = compFace !== state.view.face;
+  const otherSide = !comp.floating && compFace !== state.view.face; // floating parts belong to no side
   if(otherSide && !state.viewOpts.showOtherSideComponents) return;
 
   const holes = componentPinHoles(comp);
-  const pxHoles = holes.map(h=>({...h, p:holeToPixel(h.col,h.row)}));
+  const pxHoles = holes.map(h=>({...h, p:pinPixel(h)}));
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
   pxHoles.forEach(h=>{ minX=Math.min(minX,h.p.x); maxX=Math.max(maxX,h.p.x); minY=Math.min(minY,h.p.y); maxY=Math.max(maxY,h.p.y); });
   const br = componentBodyRect(comp);
@@ -816,6 +833,7 @@ function drawComponent(comp, selected){
   ctx.fillStyle = selected ? '#eef2ff' : (otherSide ? '#f1f2f4' : '#fff');
   ctx.strokeStyle = selected ? '#3763e8' : col;
   ctx.lineWidth = (selected?2.4:1.4)/state.view.zoom;
+  if(comp.floating) ctx.setLineDash([6/state.view.zoom,4/state.view.zoom]); // dashed outline = floating
   roundRect(ctx, bx,by,bw,bh, Math.min(10,bw/4,bh/4));
   // body fill is 75% transparent by default (so holes and wires stay visible); outline stays solid
   const baseAlpha = ctx.globalAlpha;
@@ -823,6 +841,7 @@ function drawComponent(comp, selected){
   ctx.fill();
   ctx.globalAlpha = baseAlpha;
   ctx.stroke();
+  ctx.setLineDash([]);
   if(comp.locked) drawPadlock(bx+bw-9, by+9);
 
   // pin1 marker (small notch on dip/header)
@@ -962,7 +981,7 @@ function hitTestComponent(worldX,worldY){
     if(!fp || comp.hidden) continue;
     const br = componentBodyRect(comp);
     if(worldX>=br.bx && worldX<=br.bx+br.bw && worldY>=br.by && worldY<=br.by+br.bh) return comp;
-    const near = componentPinHoles(comp).some(h=>{ const p=holeToPixel(h.col,h.row); return Math.hypot(p.x-worldX,p.y-worldY)<10; });
+    const near = componentPinHoles(comp).some(h=>{ const p=pinPixel(h); return Math.hypot(p.x-worldX,p.y-worldY)<10; });
     if(near) return comp;
   }
   return null;
@@ -994,6 +1013,15 @@ function distToSeg(px,py,a,b){
 }
 
 function pinOrHoleAtWorld(worldX,worldY){
+  // floating components first: their pins are not on the grid
+  for(let i=state.components.length-1;i>=0;i--){
+    const c = state.components[i];
+    if(!c.floating || c.hidden) continue;
+    for(const ph of componentPinHoles(c)){
+      if(Math.hypot(ph.x-worldX,ph.y-worldY) <= GRID_PX*0.5)
+        return {ref:'pin', compId:c.id, pinIndex:ph.index, col:null, row:null, floating:true, key:ph.key, x:ph.x, y:ph.y, label:c.label+'.'+ph.name};
+    }
+  }
   const h = nearestHole(worldX,worldY);
   if(!h) return null;
   const p = holeToPixel(h.col,h.row);
@@ -1042,7 +1070,8 @@ function onPointerDown(e){
       }
       pointerState.mode='dragComp';
       pointerState.dragComp = comp;
-      pointerState.dragOffset = {x: world.x - holeToPixel(comp.col,comp.row).x, y: world.y - holeToPixel(comp.col,comp.row).y};
+      const anc = compAnchorPixel(comp);
+      pointerState.dragOffset = {x: world.x - anc.x, y: world.y - anc.y};
       pointerState.dragStartScreen = {x:pos.x, y:pos.y};
       pointerState.dragMoved = false;
       return;
@@ -1075,7 +1104,7 @@ function onPointerDown(e){
     const target = pinOrHoleAtWorld(world.x,world.y);
     if(!target){ pointerState.mode='pan'; pointerState.startX=pos.x; pointerState.startY=pos.y; pointerState.startOx=state.view.ox; pointerState.startOy=state.view.oy; return; }
     const now = Date.now();
-    const isDoubleTap = (now-lastTapTime<380) && lastTapTarget && lastTapTarget.col===target.col && lastTapTarget.row===target.row;
+    const isDoubleTap = (now-lastTapTime<380) && lastTapTarget && lastTapTarget.col===target.col && lastTapTarget.row===target.row && lastTapTarget.compId===target.compId && lastTapTarget.pinIndex===target.pinIndex;
     lastTapTime = now; lastTapTarget = target;
 
     if(!state.ui.drawingWire){
@@ -1117,7 +1146,7 @@ function onPointerDown(e){
       // independent of the viewed face: the probe follows the copper face where the parts
       // touching this hole are soldered (opposite to their placement side)
       const res = {};
-      probeFacesAt(target.col,target.row).forEach(f=>{ res[f] = netMembersOf(computeNets(f), target.col, target.row); });
+      probeFacesAt(target.col,target.row,target.key).forEach(f=>{ res[f] = netMembersOf(computeNets(f), target.col, target.row, target.key); });
       state.ui.probeResult = res;
       renderDebugResult(target, res);
       draw();
@@ -1134,13 +1163,14 @@ function onPointerDown(e){
   }
 }
 
-function probeFacesAt(col,row){
+function probeFacesAt(col,row,key){
+  const k0 = key || keyOf(col,row);
   const faces = new Set();
   state.components.forEach(c=>{
-    if(componentPinHoles(c).some(h=>h.col===col&&h.row===row)) faces.add(solderFace(c));
+    if(!c.floating && componentPinHoles(c).some(h=>holeKey(h)===k0)) faces.add(solderFace(c));
   });
   state.wires.forEach(w=>{
-    if(wireEnds(w).some(h=>h.col===col&&h.row===row)) faces.add(solderFace(w));
+    if(wireEnds(w).some(h=>holeKey(h)===k0)) faces.add(solderFace(w));
   });
   // bare hole / rail: nothing attached yet, so show both copper faces
   return faces.size ? ['front','back'].filter(f=>faces.has(f)) : ['front','back'];
@@ -1149,6 +1179,7 @@ function probeFacesAt(col,row){
 /* wire ends sitting on a pin of this component become pin references, so the wire
    end follows the component when it is moved (bends stay where they are) */
 function attachWireEndsToComponent(comp){
+  if(comp.floating) return;
   const holes = componentPinHoles(comp);
   state.wires.forEach(w=>{
     if(w.locked || w.face!==(comp.face||'front')) return;
@@ -1229,8 +1260,15 @@ function onPointerMove(e){
     if(!pointerState.dragMoved) return;
     const targetX = world.x - pointerState.dragOffset.x;
     const targetY = world.y - pointerState.dragOffset.y;
-    const nh = nearestHole(targetX,targetY);
-    if(nh){ pointerState.dragComp.col = nh.col; pointerState.dragComp.row = nh.row; draw(); }
+    if(pointerState.dragComp.floating){
+      const q = GRID_PX/4; // free placement, quarter-cell steps
+      pointerState.dragComp.x = Math.round(targetX/q)*q;
+      pointerState.dragComp.y = Math.round(targetY/q)*q;
+      draw();
+    } else {
+      const nh = nearestHole(targetX,targetY);
+      if(nh){ pointerState.dragComp.col = nh.col; pointerState.dragComp.row = nh.row; draw(); }
+    }
   } else if(pointerState.mode==='dragWirePoint' && pointerState.dragWire){
     if(!pointerState.dragMoved){
       const dist = Math.hypot(pos.x-pointerState.dragStartScreen.x, pos.y-pointerState.dragStartScreen.y);
@@ -1360,6 +1398,28 @@ document.getElementById('caFlip').addEventListener('click', ()=>{
   comp.face = oppositeFace(comp.face||'front');
   saveLocal(); checkWarningsUI(); refreshWireList(); draw();
 });
+/* mount a component on the breadboard or let it float off the board */
+function setComponentMount(comp, floating){
+  if(comp.locked){ statusPill('Component is locked'); return; }
+  if(!!comp.floating===floating) return;
+  if(floating){
+    attachWireEndsToComponent(comp); // wires that end on its pins keep following it
+    const a = holeToPixel(comp.col,comp.row);
+    comp.floating = true;
+    comp.x = boardPixelSize().w + GRID_PX*4;
+    comp.y = Math.max(0,a.y);
+  } else {
+    const nh = nearestHole(comp.x||0, comp.y||0);
+    comp.floating = false; comp.col = nh.col; comp.row = nh.row;
+    delete comp.x; delete comp.y;
+  }
+  saveLocal(); checkWarningsUI(); refreshWireList(); updateCompActionsPosition(); draw();
+  if(compModalCompId===comp.id && document.getElementById('compModal').classList.contains('show')) openComponentModal(comp.id);
+}
+document.getElementById('caFloat').addEventListener('click', ()=>{
+  const comp = state.components.find(c=>c.id===state.ui.selectedComponent);
+  if(comp) setComponentMount(comp, !comp.floating);
+});
 document.getElementById('caLock').addEventListener('click', ()=>{
   const comp = state.components.find(c=>c.id===state.ui.selectedComponent);
   if(!comp) return;
@@ -1387,7 +1447,10 @@ function updateCompActionsPosition(){
   if(!comp){ box.classList.remove('show'); return; }
   document.getElementById('caLock').style.background = comp.locked ? 'var(--accent-soft)' : 'transparent';
   document.getElementById('caLock').style.color = comp.locked ? 'var(--accent)' : '';
-  const holes = componentPinHoles(comp).map(h=>holeToPixel(h.col,h.row));
+  document.getElementById('caFlip').style.display = comp.floating ? 'none' : '';
+  document.getElementById('caFloat').style.background = comp.floating ? 'var(--accent-soft)' : 'transparent';
+  document.getElementById('caFloat').style.color = comp.floating ? 'var(--accent)' : '';
+  const holes = componentPinHoles(comp).map(h=>pinPixel(h));
   let minX=Infinity,minY=Infinity,maxX=-Infinity;
   holes.forEach(p=>{ minX=Math.min(minX,p.x); maxX=Math.max(maxX,p.x); minY=Math.min(minY,p.y); });
   const s1 = worldToScreen(minX,minY);
@@ -1438,7 +1501,7 @@ function refreshCompModalPreview(){
     `<div class="pin-edit-row" data-idx="${h.index}">
        <input type="text" class="pin-edit-number" value="${escapeXml(String(h.number))}" placeholder="#">
        <input type="text" class="pin-edit-name" value="${escapeXml(h.name)}" placeholder="Pin name">
-       <span class="pin-edit-coord">(${h.col},${h.row})</span>
+       <span class="pin-edit-coord">${h.floating?'':'('+h.col+','+h.row+')'}</span>
      </div>`
   ).join('');
   document.querySelectorAll('#compModalPins .pin-edit-number, #compModalPins .pin-edit-name').forEach(inp=>{
@@ -1461,6 +1524,8 @@ function openComponentModal(compId){
   document.getElementById('compModalTitle').textContent = comp.label;
   document.getElementById('compModalLabel').value = comp.label;
   document.getElementById('compModalFace').value = comp.face||'front';
+  document.getElementById('compModalFace').disabled = !!comp.floating;
+  document.getElementById('compModalMount').value = comp.floating ? 'floating' : 'board';
   refreshCompModalPreview();
   showModal('compModal');
 }
@@ -1471,6 +1536,12 @@ document.getElementById('compModalLabel').addEventListener('change', function(){
   const v = this.value.trim();
   if(v){ comp.label = v; document.getElementById('compModalTitle').textContent = v; saveLocal(); refreshWireList(); draw(); }
   else this.value = comp.label;
+});
+document.getElementById('compModalMount').addEventListener('change', function(){
+  const comp = state.components.find(c=>c.id===compModalCompId);
+  if(!comp) return;
+  setComponentMount(comp, this.value==='floating');
+  this.value = comp.floating ? 'floating' : 'board';
 });
 document.getElementById('compModalFace').addEventListener('change', function(){
   const comp = state.components.find(c=>c.id===compModalCompId);
@@ -1937,7 +2008,7 @@ function refreshComponentList(){
     div.className='list-item';
     if(c.id===state.ui.selectedComponent) div.style.outline='2px solid var(--accent)';
     if(c.hidden) div.style.opacity='0.55';
-    div.innerHTML = `<div class="txt"><b>${escapeXml(c.label)}</b>${escapeXml(fp?fp.name:'?')} · ${(c.face||'front')==='front'?'Front':'Back'} side${c.locked?' · locked':''}${c.hidden?' · hidden':''}</div>`;
+    div.innerHTML = `<div class="txt"><b>${escapeXml(c.label)}</b>${escapeXml(fp?fp.name:'?')} · ${c.floating?'Floating':((c.face||'front')==='front'?'Front':'Back')+' side'}${c.locked?' · locked':''}${c.hidden?' · hidden':''}</div>`;
     function addBtn(icon,title,fn,active){
       const b = document.createElement('button');
       b.innerHTML = icon; b.title = title;
@@ -2030,7 +2101,7 @@ function renderDebugResult(target, res){
     html += `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:6px;">${m.holes.length} holes · ${m.pins.length} pins · ${m.wires.length} wires</div>`;
     if(m.pins.length){
       m.pins.forEach(p=>{
-        html += `<div class="net-member"><span class="badge">#${p.pinNumber} · ${escapeXml(p.pinName)}</span> ${escapeXml(p.compLabel)} — hole (${p.col},${p.row})</div>`;
+        html += `<div class="net-member"><span class="badge">#${p.pinNumber} · ${escapeXml(p.pinName)}</span> ${escapeXml(p.compLabel)} — ${p.floating?'floating pin':'hole ('+p.col+','+p.row+')'}</div>`;
       });
     } else {
       html += `<div class="net-member">No component pin attached on this face.</div>`;
